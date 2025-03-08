@@ -9,6 +9,7 @@ ENABLE_LOUDNESS="false"    # Enable loudness analysis (true/false), disabled by 
 OUTPUT_FORMAT="wav"        # Output format: wav, wavpack, or flac
 WAVPACK_COMPRESSION="0"    # WavPack compression level (0-6), 0 for no compression
 FLAC_COMPRESSION="0"       # FLAC compression level (0-12), 0 for no compression
+OVERWRITE="true"           # Overwrite existing files by default (true/false)
 
 # Function to display README
 show_help() {
@@ -18,16 +19,16 @@ README: DSD to High-Quality Audio Converter
 This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, preserving maximum audio fidelity. It uses ffmpeg to process the files, extract metadata, and apply automatic loudness normalization.
 
 ### How it Works
-1. **Input**: Scans the current directory for .dsf files.
+1. **Input**: Scans the current directory for .dsf files. If none are found, it searches subdirectories.
 2. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata from .dsf files.
 3. **Conversion Flow**:
    - Converts DSD to an intermediate WAV file (configurable codec and sample rate) with loudness normalization.
    - Depending on OUTPUT_FORMAT:
-     - WAV: Saves the intermediate WAV as the final file in 'wv/<Artist>/<Album>'.
-     - WavPack: Converts WAV to WavPack (.wv) in 'wvpk/<Artist>/<Album>'.
-     - FLAC: Converts WAV to FLAC (.flac) in 'flac/<Artist>/<Album>'.
-4. **Output**: Files are organized in a directory structure based on the output format.
-5. **Logging**: Conversion details are saved in log.txt in the output directory.
+     - WAV: Saves the intermediate WAV as the final file in 'wv/' (or '<subdir>/wv/' if in subdirectories).
+     - WavPack: Converts WAV to WavPack (.wv) in 'wvpk/' (or '<subdir>/wvpk/').
+     - FLAC: Converts WAV to FLAC (.flac) in 'flac/' (or '<subdir>/flac/').
+4. **Output**: Files are organized in a directory structure based on the output format, either in the current directory or within subdirectories.
+5. **Logging**: Conversion details are saved in log.txt in each output directory, including elapsed time.
 6. **Optional Loudness Analysis**: If enabled, loudness measurements (before and after) are saved in loudness.txt.
 
 ### Usage
@@ -40,6 +41,7 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
     - `./conv.sh wavpack -compression_level 6 -sample_rate 96000` (WavPack, high compression, 96 kHz)
     - `./conv.sh wav -codec pcm_s32le` (WAV, 32-bit PCM)
     - `./conv.sh flac -loudness true -audio_filter loudnorm=I=-14:TP=-2:LRA=9` (FLAC with custom loudness settings)
+    - `./conv.sh --skip-existing` (Skip existing files instead of overwriting)
 - For help: `./conv.sh --help`
 - Edit the script to change defaults if preferred.
 
@@ -56,6 +58,7 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
   - Example for high-quality compression: "6" (lossless, smaller file size).
 - **FLAC_COMPRESSION**: Compression level for FLAC (0-12). Default: "0" (no compression, max fidelity).
   - Example for high-quality compression: "12" (lossless, smaller file size).
+- **OVERWRITE**: Overwrite existing files by default (true/false). Default: "true". Can be overridden with --skip-existing.
 
 ### Command-Line Options
 - `<format>`: Specify OUTPUT_FORMAT (wav, wavpack, flac) as the first argument.
@@ -65,6 +68,7 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
 - `-audio_filter <value>`: Set AF (e.g., "loudnorm=I=-14:TP=-2:LRA=9").
 - `-loudness <true|false>`: Enable or disable loudness analysis.
 - `-compression_level <value>`: Set compression level for WavPack (0-6) or FLAC (0-12).
+- `--skip-existing`: Skip existing output files instead of overwriting them (overrides OVERWRITE=true).
 
 ### Compression Options
 - WavPack and FLAC are lossless formats. Higher compression levels reduce file size without losing quality:
@@ -79,6 +83,10 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
 - The script checks for ffmpeg and ffprobe before running.
 - Temporary WAV files are deleted after conversion to WavPack or FLAC.
 - Loudness analysis is optional and generates a detailed (potentially large) loudness.txt file.
+- Elapsed time is displayed and logged in log.txt.
+- If no .dsf files are found in the current directory, it searches subdirectories and prompts the user to either convert all or select individually.
+- By default, overwrites existing files (OVERWRITE=true). Use --skip-existing to skip them instead.
+- Lists all generated log files at the end for reference.
 
 Enjoy your high-quality audio conversions!
 EOF
@@ -90,22 +98,26 @@ if [ "$1" = "--help" ]; then
     show_help
 fi
 
+# Variable to track if --skip-existing is passed
+SKIP_EXISTING="false"
+
 # Parse command-line arguments
 if [ $# -gt 0 ]; then
-    # First argument is OUTPUT_FORMAT
     case "$1" in
         "wav"|"wavpack"|"flac")
             OUTPUT_FORMAT="$1"
-            shift  # Move past the format argument
+            shift
             ;;
         *)
-            echo "Error: Invalid format '$1'. Supported values are 'wav', 'wavpack', or 'flac'."
-            echo "Usage: ./conv.sh [wav|wavpack|flac] [options]"
-            exit 1
+            # Check if first argument is an option, otherwise error
+            if [[ "$1" != -* ]]; then
+                echo "Error: Invalid format '$1'. Supported values are 'wav', 'wavpack', or 'flac'."
+                echo "Usage: ./conv.sh [wav|wavpack|flac] [options]"
+                exit 1
+            fi
             ;;
     esac
 
-    # Parse remaining arguments
     while [ $# -gt 0 ]; do
         case "$1" in
             -codec)
@@ -179,9 +191,13 @@ if [ $# -gt 0 ]; then
                     exit 1
                 fi
                 ;;
+            --skip-existing)
+                SKIP_EXISTING="true"
+                shift
+                ;;
             *)
                 echo "Error: Unknown option '$1'."
-                echo "Usage: ./conv.sh [wav|wavpack|flac] [-codec <value>] [-sample_rate <value>] [-map_metadata <value>] [-audio_filter <value>] [-loudness <true|false>] [-compression_level <value>]"
+                echo "Usage: ./conv.sh [wav|wavpack|flac] [-codec <value>] [-sample_rate <value>] [-map_metadata <value>] [-audio_filter <value>] [-loudness <true|false>] [-compression_level <value>] [--skip-existing]"
                 exit 1
                 ;;
         esac
@@ -203,6 +219,9 @@ if ! command -v ffprobe &> /dev/null; then
     echo "Error: ffprobe not found. Please ensure ffmpeg is installed with ffprobe support."
     exit 1
 fi
+
+# Record start time
+START_TIME=$(date +%s)
 
 # Validate OUTPUT_FORMAT and set OUTPUT_BASE_DIR dynamically
 case "$OUTPUT_FORMAT" in
@@ -230,6 +249,7 @@ echo "  Audio filter (-af): $AF"
 echo "  Base output directory: $OUTPUT_BASE_DIR"
 echo "  Loudness analysis enabled: $ENABLE_LOUDNESS"
 echo "  Output format: $OUTPUT_FORMAT"
+echo "  Overwrite existing files: $OVERWRITE (overridden by --skip-existing: $SKIP_EXISTING)"
 case "$OUTPUT_FORMAT" in
     "wavpack")
         echo "  WavPack compression level: $WAVPACK_COMPRESSION"
@@ -251,128 +271,215 @@ fi
 echo "Starting conversion..."
 echo "----------------------------------------"
 
-# Variable to track success
+# Variables to track success, log files, and conversion counts
 success=1
-log_file=""
-loudness_file=""
+declare -A log_files  # Associative array to store log files per directory
+declare -A file_counts  # Associative array to store number of files converted per directory
 
-# Loop through all .dsf files in the current directory
-for input_file in *.dsf; do
-    # Check if .dsf files exist
-    if [ -e "$input_file" ]; then
-        # Extract metadata with ffprobe
-        ARTIST=$(ffprobe -v quiet -show_entries format_tags=artist -of default=noprint_wrappers=1:nokey=1 "$input_file")
-        ALBUM=$(ffprobe -v quiet -show_entries format_tags=album -of default=noprint_wrappers=1:nokey=1 "$input_file")
+# Function to process a single directory
+process_directory() {
+    local dir="$1"
+    local file_count=0
+    for input_file in "$dir"/*.dsf; do
+        if [ -e "$input_file" ]; then
+            # Extract metadata with ffprobe
+            ARTIST=$(ffprobe -v quiet -show_entries format_tags=artist -of default=noprint_wrappers=1:nokey=1 "$input_file")
+            ALBUM=$(ffprobe -v quiet -show_entries format_tags=album -of default=noprint_wrappers=1:nokey=1 "$input_file")
 
-        # Set default values if metadata is missing
-        [ -z "$ARTIST" ] && ARTIST="Unknown Artist"
-        [ -z "$ALBUM" ] && ALBUM="Unknown Album"
+            # Set default values if metadata is missing
+            [ -z "$ARTIST" ] && ARTIST="Unknown Artist"
+            [ -z "$ALBUM" ] && ALBUM="Unknown Album"
 
-        # Remove invalid characters from directory names (e.g., /, \, *)
-        ARTIST=$(echo "$ARTIST" | tr -d '/\\:*?"<>|')
-        ALBUM=$(echo "$ALBUM" | tr -d '/\\:*?"<>|')
-
-        # Define output directory
-        OUTPUT_DIR="$OUTPUT_BASE_DIR/$ARTIST/$ALBUM"
-        
-        # Create directory if it doesn't exist
-        mkdir -p "$OUTPUT_DIR"
-
-        # Define file names
-        wav_temp_file="$OUTPUT_DIR/${input_file%.dsf}_temp.wav"  # Temporary WAV file
-        case "$OUTPUT_FORMAT" in
-            "wav")
-                output_file="$OUTPUT_DIR/${input_file%.dsf}.wav"
-                ;;
-            "wavpack")
-                output_file="$OUTPUT_DIR/${input_file%.dsf}.wv"
-                ;;
-            "flac")
-                output_file="$OUTPUT_DIR/${input_file%.dsf}.flac"
-                ;;
-        esac
-        log_file="$OUTPUT_DIR/log.txt"
-        loudness_file="$OUTPUT_DIR/loudness.txt"
-
-        # Clear log and loudness files only on the first iteration (if loudness is enabled)
-        if [ "$input_file" = "$(ls *.dsf | head -n 1)" ]; then
-            > "$log_file"
-            if [ "$ENABLE_LOUDNESS" = "true" ]; then
-                > "$loudness_file"
+            # Use directory name as base for output (if subdir) or metadata (if current dir)
+            if [ "$dir" = "." ]; then
+                OUTPUT_DIR="$OUTPUT_BASE_DIR/$ARTIST/$ALBUM"
+            else
+                OUTPUT_DIR="$dir/$OUTPUT_BASE_DIR"
             fi
-        fi
 
-        # Measure loudness of the original file (.dsf) with ebur128 if enabled
-        if [ "$ENABLE_LOUDNESS" = "true" ]; then
-            echo "Loudness of original file: $input_file" >> "$loudness_file"
-            ffmpeg -i "$input_file" -af ebur128 -f null - 2>> "$loudness_file"
-            echo "----------------------------------------" >> "$loudness_file"
-        fi
+            # Create directory if it doesn't exist
+            mkdir -p "$OUTPUT_DIR"
 
-        # Step 1: Convert DSD to WAV (intermediate step, no compression)
-        ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$AF" "$wav_temp_file" -y >> "$log_file" 2>&1
-        if [ $? -ne 0 ]; then
-            echo "Error converting $input_file to intermediate WAV"
-            success=0
-            continue
-        fi
+            # Define file names
+            base_name=$(basename "$input_file" .dsf)
+            wav_temp_file="$OUTPUT_DIR/${base_name}_temp.wav"
+            case "$OUTPUT_FORMAT" in
+                "wav")
+                    output_file="$OUTPUT_DIR/${base_name}.wav"
+                    ;;
+                "wavpack")
+                    output_file="$OUTPUT_DIR/${base_name}.wv"
+                    ;;
+                "flac")
+                    output_file="$OUTPUT_DIR/${base_name}.flac"
+                    ;;
+            esac
 
-        # Step 2: Convert WAV to final format
-        case "$OUTPUT_FORMAT" in
-            "wav")
-                mv "$wav_temp_file" "$output_file"
-                ;;
-            "wavpack")
-                ffmpeg -i "$wav_temp_file" -acodec wavpack -compression_level "$WAVPACK_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1
-                if [ $? -ne 0 ]; then
-                    echo "Error converting $input_file to WavPack"
-                    success=0
-                    rm -f "$wav_temp_file"
+            # Check if output file already exists
+            if [ -e "$output_file" ]; then
+                if [ "$SKIP_EXISTING" = "true" ]; then
+                    echo "File $output_file already exists. Skipping conversion of $input_file (--skip-existing enabled)."
                     continue
+                elif [ "$OVERWRITE" = "true" ]; then
+                    echo "File $output_file already exists. Overwriting due to OVERWRITE=true."
                 fi
-                rm -f "$wav_temp_file"
-                ;;
-            "flac")
-                ffmpeg -i "$wav_temp_file" -acodec flac -compression_level "$FLAC_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1
-                if [ $? -ne 0 ]; then
-                    echo "Error converting $input_file to FLAC"
-                    success=0
-                    rm -f "$wav_temp_file"
-                    continue
-                fi
-                rm -f "$wav_temp_file"
-                ;;
-        esac
+            fi
 
-        # Check if conversion was successful
-        if [ -f "$output_file" ]; then
-            echo "Converted: $input_file -> $output_file"
-            
-            # Measure loudness of the converted file with ebur128 if enabled
+            log_file="$OUTPUT_DIR/log.txt"
+            loudness_file="$OUTPUT_DIR/loudness.txt"
+
+            # Store log file path
+            log_files["$dir"]="$log_file"
+
+            # Clear log and loudness files only on the first file in this dir
+            if [ "$input_file" = "$(ls "$dir"/*.dsf | head -n 1)" ]; then
+                > "$log_file"
+                if [ "$ENABLE_LOUDNESS" = "true" ]; then
+                    > "$loudness_file"
+                fi
+            fi
+
+            # Measure loudness of the original file if enabled
             if [ "$ENABLE_LOUDNESS" = "true" ]; then
-                echo "Loudness of converted file: $output_file" >> "$loudness_file"
-                ffmpeg -i "$output_file" -af ebur128 -f null - 2>> "$loudness_file"
+                echo "Loudness of original file: $input_file" >> "$loudness_file"
+                ffmpeg -i "$input_file" -af ebur128 -f null - 2>> "$loudness_file"
                 echo "----------------------------------------" >> "$loudness_file"
             fi
+
+            # Step 1: Convert DSD to WAV
+            ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$AF" "$wav_temp_file" -y >> "$log_file" 2>&1
+            if [ $? -ne 0 ]; then
+                echo "Error converting $input_file to intermediate WAV"
+                success=0
+                continue
+            fi
+
+            # Step 2: Convert WAV to final format
+            case "$OUTPUT_FORMAT" in
+                "wav")
+                    mv "$wav_temp_file" "$output_file"
+                    ;;
+                "wavpack")
+                    ffmpeg -i "$wav_temp_file" -acodec wavpack -compression_level "$WAVPACK_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1
+                    if [ $? -ne 0 ]; then
+                        echo "Error converting $input_file to WavPack"
+                        success=0
+                        rm -f "$wav_temp_file"
+                        continue
+                    fi
+                    rm -f "$wav_temp_file"
+                    ;;
+                "flac")
+                    ffmpeg -i "$wav_temp_file" -acodec flac -compression_level "$FLAC_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1
+                    if [ $? -ne 0 ]; then
+                        echo "Error converting $input_file to FLAC"
+                        success=0
+                        rm -f "$wav_temp_file"
+                        continue
+                    fi
+                    rm -f "$wav_temp_file"
+                    ;;
+            esac
+
+            if [ -f "$output_file" ]; then
+                echo "Converted: $input_file -> $output_file"
+                ((file_count++))
+                if [ "$ENABLE_LOUDNESS" = "true" ]; then
+                    echo "Loudness of converted file: $output_file" >> "$loudness_file"
+                    ffmpeg -i "$output_file" -af ebur128 -f null - 2>> "$loudness_file"
+                    echo "----------------------------------------" >> "$loudness_file"
+                fi
+            else
+                echo "Error converting: $input_file"
+                success=0
+            fi
+        fi
+    done
+    file_counts["$dir"]=$file_count
+}
+
+# Check for .dsf files in the current directory
+dsf_files_found=$(ls *.dsf 2>/dev/null | wc -l)
+
+if [ "$dsf_files_found" -gt 0 ]; then
+    # Process .dsf files in the current directory
+    process_directory "."
+else
+    # No .dsf files in current directory, search subdirectories
+    subdirs_with_dsf=$(find . -maxdepth 1 -type d -not -path . -exec sh -c 'ls "{}"/*.dsf >/dev/null 2>&1 && echo "{}"' \; | sed 's|./||')
+    if [ -n "$subdirs_with_dsf" ]; then
+        echo "No .dsf files found in the current directory."
+        echo "However, .dsf files were found in the following subdirectories:"
+        echo "$subdirs_with_dsf"
+        echo -n "Would you like to convert all subdirectories at once (a) or select one by one (o)? (a/o): "
+        read -r mode
+        if [[ "$mode" =~ ^[Aa]$ ]]; then
+            echo "Converting all subdirectories..."
+            # Convert subdirs_with_dsf to an array to avoid subshell issues
+            mapfile -t subdir_array <<< "$subdirs_with_dsf"
+            for subdir in "${subdir_array[@]}"; do
+                echo "Processing subdirectory: $subdir"
+                process_directory "$subdir"
+            done
+        elif [[ "$mode" =~ ^[Oo]$ ]]; then
+            echo "Select subdirectories to convert (y/n for each):"
+            echo "$subdirs_with_dsf" | while IFS= read -r subdir; do
+                echo -n "Convert $subdir? (y/n): "
+                read -r response
+                if [[ "$response" =~ ^[Yy]$ ]]; then
+                    echo "Processing subdirectory: $subdir"
+                    process_directory "$subdir"
+                else
+                    echo "Skipping $subdir"
+                fi
+            done
         else
-            echo "Error converting: $input_file"
-            success=0
+            echo "Invalid option. Conversion aborted."
+            exit 0
         fi
     else
-        echo "No .dsf files found in the current directory."
+        echo "No .dsf files found in the current directory or its subdirectories."
         exit 1
     fi
-done
+fi
+
+# Record end time and calculate elapsed time
+END_TIME=$(date +%s)
+ELAPSED_TIME=$((END_TIME - START_TIME))
 
 # Display final message based on conversion success
 if [ $success -eq 1 ]; then
-    echo "Conversion completed! Details in $log_file"
-    if [ "$ENABLE_LOUDNESS" = "true" ]; then
-        echo "Loudness measurements saved in $loudness_file"
-    fi
+    echo "Conversion completed successfully!"
 else
-    echo "Conversion completed with errors. Check $log_file for details."
-    if [ "$ENABLE_LOUDNESS" = "true" ]; then
-        echo "Partial loudness measurements saved in $loudness_file"
-    fi
+    echo "Conversion completed with errors!"
 fi
+
+# List all generated log files and file counts
+if [ ${#log_files[@]} -gt 0 ]; then
+    echo "Details saved in the following log files:"
+    total_files=0
+    for dir in "${!log_files[@]}"; do
+        echo "  ${log_files[$dir]} (${file_counts[$dir]} files converted)"
+        ((total_files += file_counts[$dir]))
+    done
+    echo "Total files converted: $total_files"
+else
+    echo "No conversions performed."
+fi
+
+if [ "$ENABLE_LOUDNESS" = "true" ]; then
+    echo "Loudness measurements saved alongside each log.txt."
+fi
+echo "Elapsed time: $ELAPSED_TIME seconds"
+
+# Append completion message to each log file
+for log_file in "${log_files[@]}"; do
+    echo "" >> "$log_file"
+    echo "----------------------------------------" >> "$log_file"
+    if [ $success -eq 1 ]; then
+        echo "Conversion completed on $(date)" >> "$log_file"
+    else
+        echo "Conversion completed with errors on $(date)" >> "$log_file"
+    fi
+    echo "Elapsed time: $ELAPSED_TIME seconds" >> "$log_file"
+done
