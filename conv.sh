@@ -87,6 +87,8 @@ EOF
 # Variables for tracking
 SKIP_EXISTING="false"
 declare -i overwritten=0 skipped=0
+TEMP_LOG="/tmp/conv_$$_results.log"
+> "$TEMP_LOG"  # Initialize temporary log file
 
 # Parse arguments
 if [ $# -gt 0 ]; then
@@ -133,8 +135,8 @@ case "$OUTPUT_FORMAT" in
     *) echo "Error: Invalid OUTPUT_FORMAT"; exit 1 ;;
 esac
 
-# Export variables for parallel (including OUTPUT_BASE_DIR)
-export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR ENABLE_LOUDNESS OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR
+# Export variables for parallel (including OUTPUT_BASE_DIR and TEMP_LOG)
+export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR ENABLE_LOUDNESS OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -189,12 +191,14 @@ process_file() {
     if [ -e "$output_file" ]; then
         if [ "$SKIP_EXISTING" = "true" ]; then
             echo "File $output_file already exists. Skipping conversion of $input_file (--skip-existing enabled)."
-            printf '%s:%s\n' "$dir" "skipped" > "/tmp/conv_$$_status_${base_name//[^a-zA-Z0-9]/_}"
+            echo "$dir:skipped" >> "$TEMP_LOG"
             return
         elif [ "$OVERWRITE" = "true" ]; then
             echo "File $output_file already exists. Overwriting due to OVERWRITE=true."
-            printf '%s:%s\n' "$dir" "overwritten" > "/tmp/conv_$$_status_${base_name//[^a-zA-Z0-9]/_}"
+            echo "$dir:overwritten" >> "$TEMP_LOG"
         fi
+    else
+        echo "$dir:converted" >> "$TEMP_LOG"
     fi
 
     log_file=$(normalize_path "$OUTPUT_DIR/log.txt")
@@ -221,7 +225,7 @@ process_file() {
         echo "ffmpeg command failed: ffmpeg -i \"$input_file\" -acodec \"$ACODEC\" -ar \"$AR\" -map_metadata \"$MAP_METADATA\" -af \"$AF\" \"$wav_temp_file\" -y" >&2
         echo "Check $log_file for details" >&2
         rm -f "$wav_temp_file"
-        printf '%s:%s\n' "$dir" "error" > "/tmp/conv_$$_status_${base_name//[^a-zA-Z0-9]/_}"
+        echo "$dir:error" >> "$TEMP_LOG"
         return 1
     fi
 
@@ -234,7 +238,7 @@ process_file() {
     if [ $? -ne 0 ]; then
         echo "Error converting $input_file to $OUTPUT_FORMAT" >&2
         rm -f "$wav_temp_file"
-        printf '%s:%s\n' "$dir" "error" > "/tmp/conv_$$_status_${base_name//[^a-zA-Z0-9]/_}"
+        echo "$dir:error" >> "$TEMP_LOG"
         return 1
     fi
     rm -f "$wav_temp_file"
@@ -242,20 +246,11 @@ process_file() {
     # Verify output integrity
     if [ ! -s "$output_file" ]; then
         echo "Error: $output_file is empty" >&2
-        printf '%s:%s\n' "$dir" "error" > "/tmp/conv_$$_status_${base_name//[^a-zA-Z0-9]/_}"
+        echo "$dir:error" >> "$TEMP_LOG"
         return 1
     fi
 
     echo "Converted: $input_file -> $output_file"
-    printf '%s:%s\n' "$dir" "converted" > "/tmp/conv_$$_status_${base_name//[^a-zA-Z0-9]/_}"
-
-    # Measure converted loudness if enabled
-    if [ "$ENABLE_LOUDNESS" = "true" ]; then
-        echo "Loudness of converted file: $output_file" >> "$loudness_file"
-        ffmpeg -i "$output_file" -af ebur128 -f null - 2>> "$loudness_file"
-        echo "----------------------------------------" >> "$loudness_file"
-    fi
-
     return 0
 }
 
@@ -263,7 +258,7 @@ process_file() {
 cleanup() {
     echo "Script interrupted. Cleaning up temporary files..."
     find . -name "*_temp.wav" -delete
-    rm -f /tmp/conv_$$_status_*
+    rm -f "$TEMP_LOG"
     exit 1
 }
 trap cleanup INT TERM
@@ -302,24 +297,24 @@ else
                 ;;
             [Nn]*)
                 echo "Aborting conversion."
+                rm -f "$TEMP_LOG"
                 exit 0
                 ;;
             *)
                 echo "Invalid response. Aborting conversion."
+                rm -f "$TEMP_LOG"
                 exit 1
                 ;;
         esac
     else
         echo "No .dsf files found in current directory or subdirectories."
+        rm -f "$TEMP_LOG"
         exit 1
     fi
 fi
 
-# Collect results from parallel processing
-for file in /tmp/conv_$$_status_*; do
-    [ -e "$file" ] || continue
-    base_name=$(basename "$file" | sed 's/conv_.*_status_//')
-    IFS=':' read -r dir status < "$file"
+# Collect results from the temporary log
+while IFS=':' read -r dir status; do
     case "$status" in
         "converted") ((file_counts["$dir"]++)) ;;
         "overwritten") ((file_counts["$dir"]++)); ((overwritten++)) ;;
@@ -327,9 +322,8 @@ for file in /tmp/conv_$$_status_*; do
         "error") success=0 ;;
     esac
     log_files["$dir"]=$(normalize_path "$dir/$OUTPUT_BASE_DIR/log.txt")
-    rm -f "$file"
-done
-rm -f /tmp/conv_$$_status_*
+done < "$TEMP_LOG"
+rm -f "$TEMP_LOG"
 
 # Calculate elapsed time
 END_TIME=$(date +%s)
@@ -341,18 +335,16 @@ if [ $success -eq 1 ]; then
 else
     echo "Conversion completed with errors!"
 fi
+total_files=0
 if [ ${#log_files[@]} -gt 0 ]; then
     echo "Details saved in the following log files:"
-    total_files=0
     for dir in "${!log_files[@]}"; do
         echo "  ${log_files[$dir]} (${file_counts[$dir]:-0} files converted)"
-        ((total_files += file_counts[$dir]))
+        ((total_files += ${file_counts[$dir]:-0}))
     done
     echo "Total files converted: $total_files"
-    echo "Files overwritten: $overwritten"
-    echo "Files skipped: $skipped"
-else
-    echo "No conversions performed."
+    [ $overwritten -gt 0 ] && echo "Files overwritten: $overwritten"
+    [ $skipped -gt 0 ] && echo "Files skipped: $skipped"
 fi
 [ "$ENABLE_LOUDNESS" = "true" ] && echo "Loudness measurements saved alongside each log.txt."
 echo "Elapsed time: $ELAPSED_TIME seconds"
