@@ -11,7 +11,7 @@ AF="loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"  # Audio filter (t
 LOUDNORM_LINEAR="false"     # Use linear (one-pass) loudness normalization (true) or two-pass (false)
 ENABLE_SPECTROGRAM="false"  # Enable spectrogram generation (true/false)
 SPECTROGRAM_SIZE="1920x1080"  # Default spectrogram resolution (width x height)
-SPECTROGRAM_MODE="integrated"  # Default spectrogram mode (integrated, momentary, shortterm, separate, dualmono, histogram)
+SPECTROGRAM_MODE="combined"  # Default spectrogram mode (combined or separate)
 OUTPUT_FORMAT="wav"         # Output format: wav, wavpack, or flac
 WAVPACK_COMPRESSION="0"     # WavPack compression level (0-6)
 FLAC_COMPRESSION="0"        # FLAC compression level (0-12)
@@ -37,11 +37,11 @@ validate_resolution() {
 # Function to validate spectrogram mode
 validate_spectrogram_mode() {
     case "$1" in
-        "integrated"|"momentary"|"shortterm"|"separate"|"dualmono"|"histogram")
+        "combined"|"separate")
             return 0
             ;;
         *)
-            echo "Error: Invalid spectrogram mode '$1'. Valid options: integrated, momentary, shortterm, separate, dualmono, histogram"
+            echo "Error: Invalid spectrogram mode '$1'. Valid options: combined, separate"
             exit 1
             ;;
     esac
@@ -82,7 +82,7 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
 - **LOUDNORM_LINEAR**: One-pass (true) or two-pass (false) loudness normalization. Default: "false".
 - **ENABLE_SPECTROGRAM**: Spectrogram generation (true/false). Default: "false".
 - **SPECTROGRAM_SIZE**: Spectrogram resolution (width x height). Default: "1920x1080".
-- **SPECTROGRAM_MODE**: Spectrogram mode. Default: "integrated".
+- **SPECTROGRAM_MODE**: Spectrogram mode (combined or separate). Default: "combined".
 - **OUTPUT_FORMAT**: "wav", "wavpack", "flac". Default: "wav".
 - **WAVPACK_COMPRESSION**: 0-6. Default: "0".
 - **FLAC_COMPRESSION**: 0-12. Default: "0".
@@ -98,14 +98,10 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
 - `--loudnorm-TP <value>`: Set true peak in dBTP (e.g., -2).
 - `--loudnorm-LRA <value>`: Set loudness range in LU (e.g., 9).
 - `--loudnorm-linear <true|false>`: Use one-pass (true) or two-pass (false) loudness normalization.
-- `--spectrogram [width x height] [mode]`: Enable spectrogram generation (saved as e.g., wv/spectrogram/output.png). Optional resolution (default: 1920x1080) and mode (default: integrated).
+- `--spectrogram [width x height] [mode]`: Enable spectrogram generation (saved as e.g., wv/spectrogram/output.png). Optional resolution (default: 1920x1080) and mode (default: combined).
   - **Spectrogram Modes** (from FFmpeg 'showspectrumpic' documentation):
-    - `integrated`: Displays a single color representing the integrated loudness (average across the entire track). Useful for a global loudness overview.
-    - `momentary`: Shows loudness with a short window (~400ms). Highlights rapid changes and peaks in real-time dynamics.
-    - `shortterm`: Displays loudness over a 3-second window. Balances detail and stability for dynamic variations.
-    - `separate`: Renders each channel (e.g., left and right) separately in the spectrogram. Ideal for stereo or multichannel analysis.
-    - `dualmono`: Treats stereo input as two independent mono channels rather than a stereo mix. Useful for specific channel comparisons.
-    - `histogram`: Plots a histogram of loudness distribution over time. Good for visualizing loudness spread and consistency.
+    - `combined`: Combines all channels into a single spectrogram image. Useful for an overall view of the audio.
+    - `separate`: Displays each channel (e.g., left and right) separately in the spectrogram. Ideal for analyzing stereo differences.
 - `-compression_level <value>`: Compression level for WavPack (0-6) or FLAC (0-12); ignored for WAV.
 - `--skip-existing`: Skip existing output files instead of overwriting.
 - `--parallel <number>`: Set number of parallel jobs (e.g., 4).
@@ -448,7 +444,7 @@ if [ ${#log_files[@]} -gt 0 ]; then
     done
     echo "Total files converted: $total_files"
     [ $overwritten -gt 0 ] && echo "Files overwritten: $overwritten"
-    [ $skipped -gt 0 ] && echo "Files skipped: $skipped"
+    [` $skipped -gt 0 ] && echo "Files skipped: $skipped"
 fi
 [ "$ENABLE_SPECTROGRAM" = "true" ] && echo "Spectrograms saved in each output directory under spectrogram/ (e.g., $OUTPUT_BASE_DIR/spectrogram/output.png)."
 echo "Elapsed time: $ELAPSED_TIME seconds"
