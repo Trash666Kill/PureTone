@@ -1,1 +1,3 @@
 PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, preserving maximum audio fidelity. It uses ffmpeg to process files in parallel with GNU Parallel, extract metadata, and optionally generate spectrogram images.
+
+DVD-A? Coming soon...
