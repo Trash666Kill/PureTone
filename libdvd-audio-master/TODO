@@ -1,0 +1,93 @@
+# -*- Mode: Org -*-
+* DONE Finish version 1.0
+** DONE Construct basic API
+** DONE Add PCM decoding support
+** DONE Add MLP decoding support
+** DONE Add seeking support
+   It should be possible to seek directly to the start of a track
+** DONE Add unprotection support
+** DONE Add licensing text to all files
+*** DONE array
+    - [X] src/array.h
+    - [X] src/array.c
+*** DONE bitstream
+    - [X] src/bitstream.h
+    - [X] src/huffman.h
+    - [X] src/mini-gmp.h
+    - [X] src/read_bits_table_be.h
+    - [X] src/read_bits_table_le.h
+    - [X] src/read_unary_table_be.h
+    - [X] src/read_unary_table_le.h
+    - [X] src/unread_bit_table_be.h
+    - [X] src/unread_bit_table_le.h
+
+    - [X] src/bitstream.c
+    - [X] src/func_io.c
+    - [X] src/huffman.c
+    - [X] src/mini-gmp.c
+    - [X] src/parson.c
+*** DONE core dvda
+   - [X] include/dvda.h
+   - [X] src/aob.h
+   - [X] src/audio_ts.h
+   - [X] src/mlp.h
+   - [X] src/mlp_codebook1.h
+   - [X] src/mlp_codebook2.h
+   - [X] src/mlp_codebook3.h
+   - [X] src/pcm.h
+   - [X] src/stream_parameters.h
+
+   - [X] src/aob.c
+   - [X] src/audio_ts.c
+   - [X] src/dvda.c
+   - [X] src/mlp.c
+   - [X] src/pcm.c
+
+   - [X] utils/dvda-debug-info.c
+   - [X] utils/dvda2wav
+** DONE Add basic debugging utilities
+   These are stripped-down proof-of-concepts to show off how the library works
+   and can be probed with Valgrind to ensure there's no bugs.
+*** DONE dvda-debug-info
+*** DONE dvda2wav
+** DONE Add versioning to library
+   Ensure major and minor version show up somewhere
+** DONE Make both static and dynamic libraries
+** DONE Add .pc file for pkg-config
+   Make this consistent with other libraries like libcdio
+** DONE Verify utilities for errors
+   Run Valgrind over them to ensure there's no memory leaks
+   or other access errors.
+** DONE Add library documentation
+*** DONE Add RST file for the web
+** DONE Handle tracks that don't fall on packet boundaries
+   The "start sector" field in the ATX_01_0.IFO file
+   should indicate which sector in which ATS_01_X.AOB file
+   the track starts on.
+
+   Only sometimes tracks don't start on the first audio packet of the sector
+   so one "puts the needle down" right in the middle of an MLP frame.
+   Sometimes tracks don't even start in that sector at all
+   for a bit of added stupidity.
+
+   This is why the previous implementation treated the MLP tracks
+   as one big stream and split it at rip-time by PTS ticks
+   just to overcome that silliness, but individual tracks in an
+   MLP stream may not be consistent either in terms of stream parameters.
+
+   Tracks will be handled correctly to match the API this time around
+   via as much stream probing as it takes.
+** DONE Handle end of tracks correctly
+   I'd been converting PTS ticks to PCM frames and using that as the total track
+   length, but that's not quite right either.
+
+   Need to figure out a more accurate way to find a track's end.
+* TODO Finish version 1.1
+** TODO Add format documentation
+   Overhaul the documentation on how to read and decode DVD-A discs
+   to be a bit more comprehensive.
+** TODO Add some optimization
+   see if there's any obvious bits that could be optimized
+** TODO Add better error reporting
+   It might be useful to generate specific error codes
+   when some problem occurs opening things or during decoding.
