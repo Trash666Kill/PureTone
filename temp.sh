@@ -9,9 +9,9 @@ LOUDNORM_TP="-1"            # True peak limit (dBTP)
 LOUDNORM_LRA="11"           # Loudness range (LU)
 AF="loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"  # Audio filter (two-pass by default)
 LOUDNORM_LINEAR="false"     # Use linear (one-pass) loudness normalization (true) or two-pass (false)
-ENABLE_LOUDNESS="false"     # Enable loudness analysis (true/false)
 ENABLE_SPECTROGRAM="false"  # Enable spectrogram generation (true/false)
 SPECTROGRAM_SIZE="1920x1080"  # Default spectrogram resolution (width x height)
+SPECTROGRAM_MODE="integrated"  # Default spectrogram mode (integrated, momentary, shortterm, separate, dualmono, histogram)
 OUTPUT_FORMAT="wav"         # Output format: wav, wavpack, or flac
 WAVPACK_COMPRESSION="0"     # WavPack compression level (0-6)
 FLAC_COMPRESSION="0"        # FLAC compression level (0-12)
@@ -34,12 +34,25 @@ validate_resolution() {
     fi
 }
 
+# Function to validate spectrogram mode
+validate_spectrogram_mode() {
+    case "$1" in
+        "integrated"|"momentary"|"shortterm"|"separate"|"dualmono"|"histogram")
+            return 0
+            ;;
+        *)
+            echo "Error: Invalid spectrogram mode '$1'. Valid options: integrated, momentary, shortterm, separate, dualmono, histogram"
+            exit 1
+            ;;
+    esac
+}
+
 # Function to display README
 show_help() {
     cat << 'EOF'
 README: DSD to High-Quality Audio Converter
 
-This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, preserving maximum audio fidelity. It uses ffmpeg to process files in parallel with GNU Parallel, extract metadata, and apply automatic loudness normalization.
+This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, preserving maximum audio fidelity. It uses ffmpeg to process files in parallel with GNU Parallel, extract metadata, and optionally generate spectrogram images.
 
 ### How it Works
 1. **Input**: Scans the specified or current directory for .dsf files or subdirectories.
@@ -56,7 +69,7 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
   - Examples:
     - `./conv.sh` (Uses current directory, default WAV format)
     - `./conv.sh flac --loudnorm-I -14 --loudnorm-linear true /path/to/music`
-    - `./conv.sh wavpack --skip-existing -compression_level 6 --spectrogram 1920x1080 ./music`
+    - `./conv.sh wavpack --skip-existing -compression_level 6 --spectrogram 1920x1080 separate ./music`
     - `./conv.sh --parallel 4 /path/to/dsd`
 
 ### Configurable Parameters
@@ -66,10 +79,10 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
 - **LOUDNORM_I**: Integrated loudness (LUFS). Default: "-16".
 - **LOUDNORM_TP**: True peak (dBTP). Default: "-1".
 - **LOUDNORM_LRA**: Loudness range (LU). Default: "11".
-- **LOUDNORM_LINEAR**: One-pass (true) or two-pass (false). Default: "false".
-- **ENABLE_LOUDNESS**: Loudness analysis (true/false). Default: "false".
+- **LOUDNORM_LINEAR**: One-pass (true) or two-pass (false) loudness normalization. Default: "false".
 - **ENABLE_SPECTROGRAM**: Spectrogram generation (true/false). Default: "false".
 - **SPECTROGRAM_SIZE**: Spectrogram resolution (width x height). Default: "1920x1080".
+- **SPECTROGRAM_MODE**: Spectrogram mode. Default: "integrated".
 - **OUTPUT_FORMAT**: "wav", "wavpack", "flac". Default: "wav".
 - **WAVPACK_COMPRESSION**: 0-6. Default: "0".
 - **FLAC_COMPRESSION**: 0-12. Default: "0".
@@ -85,8 +98,14 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
 - `--loudnorm-TP <value>`: Set true peak in dBTP (e.g., -2).
 - `--loudnorm-LRA <value>`: Set loudness range in LU (e.g., 9).
 - `--loudnorm-linear <true|false>`: Use one-pass (true) or two-pass (false) loudness normalization.
-- `-loudness <true|false>`: Enable loudness analysis.
-- `--spectrogram [width x height]`: Enable spectrogram generation (saved as e.g., wv/spectrogram/output.png). Optional resolution (default: 1920x1080).
+- `--spectrogram [width x height] [mode]`: Enable spectrogram generation (saved as e.g., wv/spectrogram/output.png). Optional resolution (default: 1920x1080) and mode (default: integrated).
+  - **Spectrogram Modes** (from FFmpeg 'showspectrumpic' documentation):
+    - `integrated`: Displays a single color representing the integrated loudness (average across the entire track). Useful for a global loudness overview.
+    - `momentary`: Shows loudness with a short window (~400ms). Highlights rapid changes and peaks in real-time dynamics.
+    - `shortterm`: Displays loudness over a 3-second window. Balances detail and stability for dynamic variations.
+    - `separate`: Renders each channel (e.g., left and right) separately in the spectrogram. Ideal for stereo or multichannel analysis.
+    - `dualmono`: Treats stereo input as two independent mono channels rather than a stereo mix. Useful for specific channel comparisons.
+    - `histogram`: Plots a histogram of loudness distribution over time. Good for visualizing loudness spread and consistency.
 - `-compression_level <value>`: Compression level for WavPack (0-6) or FLAC (0-12); ignored for WAV.
 - `--skip-existing`: Skip existing output files instead of overwriting.
 - `--parallel <number>`: Set number of parallel jobs (e.g., 4).
@@ -98,7 +117,7 @@ This script converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, pr
 - Uses two-pass loudnorm by default for accuracy unless --loudnorm-linear is set to true.
 - Processes 2 files in parallel by default; adjustable with --parallel.
 - Reports overwritten and skipped files in the summary.
-- Spectrogram generation, if enabled, may significantly increase processing time.
+- Spectrogram generation, if enabled, significantly increases processing time and resource usage (CPU, RAM, and disk).
 EOF
     exit 0
 }
@@ -141,13 +160,17 @@ while [ ${#args[@]} -gt 0 ]; do
         --loudnorm-TP) LOUDNORM_TP="${args[1]}"; unset 'args[1]' ;;
         --loudnorm-LRA) LOUDNORM_LRA="${args[1]}"; unset 'args[1]' ;;
         --loudnorm-linear) [[ "${args[1]}" =~ ^(true|false)$ ]] && LOUDNORM_LINEAR="${args[1]}" || { echo "Error: --loudnorm-linear requires true/false"; exit 1; }; unset 'args[1]' ;;
-        -loudness) [[ "${args[1]}" =~ ^(true|false)$ ]] && ENABLE_LOUDNESS="${args[1]}" || { echo "Error: -loudness requires true/false"; exit 1; }; unset 'args[1]' ;;
         --spectrogram)
             ENABLE_SPECTROGRAM="true"
             if [ ${#args[@]} -gt 1 ] && [[ "${args[1]}" =~ ^[0-9]+x[0-9]+$ ]]; then
                 validate_resolution "${args[1]}"
                 SPECTROGRAM_SIZE="${args[1]}"
                 unset 'args[1]'
+                if [ ${#args[@]} -gt 1 ]; then
+                    validate_spectrogram_mode "${args[1]}"
+                    SPECTROGRAM_MODE="${args[1]}"
+                    unset 'args[1]'
+                fi
             fi
             ;;
         -compression_level)
@@ -186,7 +209,7 @@ case "$OUTPUT_FORMAT" in
 esac
 
 # Export variables for parallel (including OUTPUT_BASE_DIR and TEMP_LOG)
-export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR ENABLE_LOUDNESS ENABLE_SPECTROGRAM SPECTROGRAM_SIZE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG WORKING_DIR
+export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR ENABLE_SPECTROGRAM SPECTROGRAM_SIZE SPECTROGRAM_MODE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG WORKING_DIR
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -208,9 +231,9 @@ echo "  Metadata mapping (-map_metadata): $MAP_METADATA"
 echo "  Audio filter (-af): $AF"
 echo "  Loudnorm linear mode: $LOUDNORM_LINEAR (true = one-pass, false = two-pass)"
 echo "  Base output directory: $OUTPUT_BASE_DIR"
-echo "  Loudness analysis enabled: $ENABLE_LOUDNESS"
 echo "  Spectrogram generation enabled: $ENABLE_SPECTROGRAM"
 [ "$ENABLE_SPECTROGRAM" = "true" ] && echo "  Spectrogram resolution: $SPECTROGRAM_SIZE"
+[ "$ENABLE_SPECTROGRAM" = "true" ] && echo "  Spectrogram mode: $SPECTROGRAM_MODE"
 echo "  Output format: $OUTPUT_FORMAT"
 echo "  Overwrite existing files: $OVERWRITE (overridden by --skip-existing: $SKIP_EXISTING)"
 echo "  Parallel jobs: $PARALLEL_JOBS"
@@ -235,7 +258,7 @@ case "$OUTPUT_FORMAT" in
         ;;
 esac
 if [ "$ENABLE_SPECTROGRAM" = "true" ]; then
-    echo "  Warning: Spectrogram generation is enabled. This may take a considerable amount of time depending on the number and size of the files."
+    echo "  Warning: Spectrogram generation is enabled. This may take a considerable amount of time and will significantly increase CPU, RAM, and disk usage depending on the number and size of the files."
 fi
 echo ""
 
@@ -277,20 +300,11 @@ process_file() {
     fi
 
     log_file=$(normalize_path "$OUTPUT_DIR/log.txt")
-    loudness_file=$(normalize_path "$OUTPUT_DIR/loudness.txt")
 
-    # Clear log/loudness files only for the first file in this run (using lock file)
+    # Clear log file only for the first file in this run (using lock file)
     if [ ! -f "$OUTPUT_DIR/.processed" ]; then
         > "$log_file" || { echo "Error: Cannot write to $log_file" >&2; return 1; }
-        [ "$ENABLE_LOUDNESS" = "true" ] && > "$loudness_file"
         touch "$OUTPUT_DIR/.processed"
-    fi
-
-    # Measure original loudness if enabled
-    if [ "$ENABLE_LOUDNESS" = "true" ]; then
-        echo "Loudness of original file: $input_file" >> "$loudness_file"
-        ffmpeg -i "$input_file" -af ebur128 -f null - 2>> "$loudness_file"
-        echo "----------------------------------------" >> "$loudness_file"
     fi
 
     # Convert DSD to WAV
@@ -327,7 +341,7 @@ process_file() {
 
     # Generate spectrogram if enabled
     if [ "$ENABLE_SPECTROGRAM" = "true" ]; then
-        ffmpeg -i "$output_file" -lavfi "showspectrumpic=s=$SPECTROGRAM_SIZE:mode=separate" "$spectrogram_file" -y >> "$log_file" 2>&1
+        ffmpeg -i "$output_file" -lavfi "showspectrumpic=s=$SPECTROGRAM_SIZE:mode=$SPECTROGRAM_MODE" "$spectrogram_file" -y >> "$log_file" 2>&1
         if [ $? -ne 0 ]; then
             echo "Error generating spectrogram for $output_file" >&2
             echo "Check $log_file for details" >&2
@@ -436,7 +450,6 @@ if [ ${#log_files[@]} -gt 0 ]; then
     [ $overwritten -gt 0 ] && echo "Files overwritten: $overwritten"
     [ $skipped -gt 0 ] && echo "Files skipped: $skipped"
 fi
-[ "$ENABLE_LOUDNESS" = "true" ] && echo "Loudness measurements saved alongside each log.txt."
 [ "$ENABLE_SPECTROGRAM" = "true" ] && echo "Spectrograms saved in each output directory under spectrogram/ (e.g., $OUTPUT_BASE_DIR/spectrogram/output.png)."
 echo "Elapsed time: $ELAPSED_TIME seconds"
 
