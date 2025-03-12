@@ -112,7 +112,7 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, prese
 - Uses two-pass loudnorm by default for accuracy unless --loudnorm-linear is set to true.
 - Processes 2 files in parallel by default; adjustable with --parallel.
 - Reports overwritten and skipped files in the summary.
-- Spectrogram generation, if enabled, significantly increases processing time and resource usage (CPU, RAM, and disk).
+- Spectrogram generation, if enabled, significantly increases processing time and resource usage (CPU, RAM, and I/O).
 EOF
     exit 0
 }
