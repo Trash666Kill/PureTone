@@ -112,7 +112,7 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, prese
 - Uses two-pass loudnorm by default for accuracy unless --loudnorm-linear is set to true.
 - Processes 2 files in parallel by default; adjustable with --parallel.
 - Reports overwritten and skipped files in the summary.
-- Spectrogram generation, if enabled, significantly increases processing time and resource usage (CPU, RAM, and I/O).
+- Spectrogram generation, if enabled, significantly increases processing time and resource usage (CPU, RAM and I/O).
 EOF
     exit 0
 }
@@ -198,6 +198,25 @@ while [ ${#args[@]} -gt 0 ]; do
     args=("${args[@]}")  # Reindex array
 done
 
+# Check if AR is a multiple of 44100 Hz
+if [ $((AR % 44100)) -ne 0 ]; then
+    remainder=$((AR % 44100))
+    quotient=$(echo "scale=4; $AR / 44100" | bc)
+    echo "Warning: Sample rate $AR Hz is not an exact multiple of 44.1 kHz. This may introduce interpolation and reduce fidelity."
+    echo "Calculation: $AR / 44100 = $quotient (remainder: $remainder), not an exact multiple."
+    echo "Recommended values and their typical use cases:"
+    echo "----------------------------------------"
+    echo "| Sample Rate (Hz) | Typical Use Case                   |"
+    echo "----------------------------------------"
+    echo "| 44100            | CD standard, widely compatible    |"
+    echo "| 88200            | High quality, balanced file size  |"
+    echo "| 176400           | Very high fidelity, DSD conversion|"
+    echo "| 352800           | Extreme fidelity, pro mastering   |"
+    echo "| 705600           | Maximum fidelity, studio-grade    |"
+    echo "----------------------------------------"
+    echo ""
+fi
+
 # Adjust AF based on LOUDNORM_LINEAR
 if [ "$LOUDNORM_LINEAR" = "true" ]; then
     AF="loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:linear=true"
@@ -220,6 +239,7 @@ export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR ENABLE_SPECTROGRAM SPECTROGRAM_
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
 command -v ffprobe >/dev/null || { echo "Error: ffprobe not found."; exit 1; }
 command -v parallel >/dev/null || { echo "Error: parallel not found. Install with 'apt install parallel'."; exit 1; }
+command -v bc >/dev/null || { echo "Error: bc not found. Install with 'apt install bc'."; exit 1; }  # Added for sample rate calculation
 echo "ffmpeg found. Version: $(ffmpeg -version | head -n 1)"
 echo "parallel found. Version: $(parallel --version | head -n 1)"
 echo "----------------------------------------"
