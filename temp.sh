@@ -108,7 +108,7 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, prese
 - `path/to/directory`: Path to process (must be last argument; required).
 
 ### Notes
-- Requires ffmpeg, ffprobe, parallel, and realpath (install with 'apt install ffmpeg parallel coreutils').
+- Requires ffmpeg, ffprobe, parallel, realpath, and bc (install with 'apt install ffmpeg parallel coreutils bc').
 - Uses two-pass loudnorm by default for accuracy unless --loudnorm-linear is set to true.
 - Processes 2 files in parallel by default; adjustable with --parallel.
 - Reports overwritten and skipped files in the summary.
