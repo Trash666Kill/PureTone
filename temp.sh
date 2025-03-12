@@ -156,9 +156,7 @@ fi
 SKIP_EXISTING="false"
 declare -i overwritten=0 skipped=0
 TEMP_LOG="/tmp/puretone_$$_results.log"
-TEMP_STREAM_INFO="/tmp/puretone_$$_stream_info.log"  # Temporary file for stream info
 > "$TEMP_LOG"  # Initialize temporary log file
-> "$TEMP_STREAM_INFO"  # Initialize temporary stream info file
 
 # Check for realpath dependency (needed for relative paths)
 command -v realpath >/dev/null || { echo "Error: realpath not found. Install with 'apt install coreutils'."; exit 1; }
@@ -260,7 +258,7 @@ case "$OUTPUT_FORMAT" in
 esac
 
 # Export variables for parallel (including OUTPUT_BASE_DIR and TEMP_LOG)
-export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR ENABLE_SPECTROGRAM SPECTROGRAM_SIZE SPECTROGRAM_MODE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_STREAM_INFO WORKING_DIR
+export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR ENABLE_SPECTROGRAM SPECTROGRAM_SIZE SPECTROGRAM_MODE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG WORKING_DIR
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -320,8 +318,22 @@ process_file() {
     local dir=$(dirname "$input_file")
     local OUTPUT_DIR=$(normalize_path "$dir/$OUTPUT_BASE_DIR")
     local SPECTROGRAM_DIR=$(normalize_path "$OUTPUT_DIR/spectrogram")
-    mkdir -p "$OUTPUT_DIR" || { echo "Error: Failed to create directory $OUTPUT_DIR" >&2; return 1; }
-    [ "$ENABLE_SPECTROGRAM" = "true" ] && mkdir -p "$SPECTROGRAM_DIR" || { echo "Error: Failed to create directory $SPECTROGRAM_DIR" >&2; return 1; }
+
+    # Create OUTPUT_DIR
+    if ! mkdir -p "$OUTPUT_DIR"; then
+        echo "Error: Failed to create directory $OUTPUT_DIR" >&2
+        echo "$dir:error" >> "$TEMP_LOG"
+        return 1
+    fi
+
+    # Create SPECTROGRAM_DIR only if spectrogram is enabled
+    if [ "$ENABLE_SPECTROGRAM" = "true" ]; then
+        if ! mkdir -p "$SPECTROGRAM_DIR"; then
+            echo "Error: Failed to create directory $SPECTROGRAM_DIR" >&2
+            echo "$dir:error" >> "$TEMP_LOG"
+            return 1
+        fi
+    fi
 
     # Extract metadata
     ARTIST=$(ffprobe -v quiet -show_entries format_tags=artist -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null || echo "Unknown Artist")
@@ -342,7 +354,7 @@ process_file() {
         if [ "$SKIP_EXISTING" = "true" ]; then
             echo "File $output_file already exists. Skipping conversion of $input_file (--skip-existing enabled)."
             echo "$dir:skipped" >> "$TEMP_LOG"
-            return
+            return 0
         elif [ "$OVERWRITE" = "true" ]; then
             echo "File $output_file already exists. Overwriting due to OVERWRITE=true."
             echo "$dir:overwritten" >> "$TEMP_LOG"
@@ -355,7 +367,7 @@ process_file() {
 
     # Clear log file only for the first file in this run (using lock file)
     if [ ! -f "$OUTPUT_DIR/.processed" ]; then
-        > "$log_file" || { echo "Error: Cannot write to $log_file" >&2; return 1; }
+        > "$log_file" || { echo "Error: Cannot write to $log_file" >&2; echo "$dir:error" >> "$TEMP_LOG"; return 1; }
         touch "$OUTPUT_DIR/.processed"
     fi
 
@@ -372,7 +384,7 @@ process_file() {
 
     # Convert to final format
     case "$OUTPUT_FORMAT" in
-        "wav") mv "$wav_temp_file" "$output_file" || { echo "Error moving $wav_temp_file to $output_file" >&2; return 1; } ;;
+        "wav") mv "$wav_temp_file" "$output_file" || { echo "Error moving $wav_temp_file to $output_file" >&2; echo "$dir:error" >> "$TEMP_LOG"; return 1; } ;;
         "wavpack") ffmpeg -i "$wav_temp_file" -acodec wavpack -compression_level "$WAVPACK_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1 ;;
         "flac") ffmpeg -i "$wav_temp_file" -acodec flac -compression_level "$FLAC_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1 ;;
     esac
@@ -403,15 +415,6 @@ process_file() {
         echo "Generated spectrogram: $spectrogram_file"
     fi
 
-    # Capture stream information with ffprobe, using only the basename
-    output_file_basename=$(basename "$output_file")
-    stream_info=$(ffprobe -v quiet -show_streams "$output_file" 2>/dev/null | grep "^Stream #0:0: Audio:")
-    if [ -n "$stream_info" ]; then
-        echo "$output_file_basename:$stream_info" >> "$TEMP_STREAM_INFO"
-    else
-        echo "$output_file_basename:Stream information unavailable" >> "$TEMP_STREAM_INFO"
-    fi
-
     echo "Converted: $input_file -> $output_file"
     return 0
 }
@@ -420,7 +423,7 @@ process_file() {
 cleanup() {
     echo "Script interrupted. Cleaning up temporary files..."
     find "$WORKING_DIR" -name "*_temp.wav" -delete
-    rm -f "$TEMP_LOG" "$TEMP_STREAM_INFO"
+    rm -f "$TEMP_LOG"
     exit 1
 }
 trap cleanup INT TERM
@@ -462,18 +465,18 @@ else
                 ;;
             [Nn]*)
                 echo "Aborting conversion."
-                rm -f "$TEMP_LOG" "$TEMP_STREAM_INFO"
+                rm -f "$TEMP_LOG"
                 exit 0
                 ;;
             *)
                 echo "Invalid response. Aborting conversion."
-                rm -f "$TEMP_LOG" "$TEMP_STREAM_INFO"
+                rm -f "$TEMP_LOG"
                 exit 1
                 ;;
         esac
     else
         echo "No .dsf files found in $WORKING_DIR or its subdirectories."
-        rm -f "$TEMP_LOG" "$TEMP_STREAM_INFO"
+        rm -f "$TEMP_LOG"
         exit 1
     fi
 fi
@@ -512,16 +515,6 @@ if [ ${#log_files[@]} -gt 0 ]; then
     [ $skipped -gt 0 ] && echo "Files skipped: $skipped"
 fi
 [ "$ENABLE_SPECTROGRAM" = "true" ] && echo "Spectrograms saved in each output directory under spectrogram/ (e.g., $OUTPUT_BASE_DIR/spectrogram/output.png)."
-
-# Display stream information without directory path
-if [ -s "$TEMP_STREAM_INFO" ]; then
-    echo "Stream Information:"
-    while IFS=':' read -r file info; do
-        # Remove leading colon from info if present and print in list format
-        echo "  - $file: ${info#:}"
-    done < "$TEMP_STREAM_INFO"
-fi
-rm -f "$TEMP_STREAM_INFO"
 
 echo "Elapsed time: $ELAPSED_TIME seconds"
 
