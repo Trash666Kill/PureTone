@@ -4,13 +4,13 @@
 ACODEC="pcm_s24le"          # Audio codec for WAV intermediate file
 AR="176400"                 # Sample rate
 MAP_METADATA="0"            # Metadata mapping
-LOUDNORM_I="-16"            # Integrated loudness target (LUFS)
+LOUDNORM_I="-18"            # Integrated loudness target (LUFS) - alterado de -16 para -18
 LOUDNORM_TP="-1"            # True peak limit (dBTP)
-LOUDNORM_LRA="11"           # Loudness range (LU)
+LOUDNORM_LRA="12"           # Loudness range (LU) - alterado de 11 para 12
 RESAMPLER="soxr"            # Resampler engine (soxr = SoX Resampler, swr = FFmpeg's default)
 PRECISION="28"              # Resampler precision (for soxr, 16-32 bits, 28 is very high quality)
 CHEBY="1"                   # Enable Chebyshev mode for soxr (1 = yes, 0 = no)
-AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"  # Audio filter (two-pass by default)
+AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"  # Audio filter (padrão atualizado)
 LOUDNORM_LINEAR="false"     # Use linear (one-pass) loudness normalization (true) or two-pass (false)
 USE_VOLUME="false"          # Flag to use volume instead of loudnorm (default: false)
 VOLUME_VALUE="0dB"          # Default volume value (only used if --volume is specified)
@@ -90,9 +90,9 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, prese
 - **ACODEC**: Default: "pcm_s24le" (24-bit PCM).
 - **AR**: Default: "176400" (176.4 kHz).
 - **MAP_METADATA**: Default: "0" (copy all metadata).
-- **LOUDNORM_I**: Integrated loudness (LUFS). Default: "-16".
+- **LOUDNORM_I**: Integrated loudness (LUFS). Default: "-18".
 - **LOUDNORM_TP**: True peak (dBTP). Default: "-1".
-- **LOUDNORM_LRA**: Loudness range (LU). Default: "11".
+- **LOUDNORM_LRA**: Loudness range (LU). Default: "12".
 - **RESAMPLER**: Resampler engine. Default: "soxr".
 - **PRECISION**: Resampler precision (for soxr). Default: "28".
 - **CHEBY**: Chebyshev mode for soxr. Default: "1".
@@ -125,6 +125,9 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, prese
 - `--parallel <number>`: Set number of parallel jobs (e.g., 4).
 - `--help`: Display this help message.
 - `path/to/directory | path/to/file.dsf`: Path to process (must be last argument; required).
+
+### Notes
+- `--volume` and loudnorm options (--loudnorm-I, --loudnorm-TP, --loudnorm-LRA) cannot be used together.
 EOF
     exit 0
 }
@@ -145,6 +148,11 @@ SKIP_EXISTING="false"
 declare -i overwritten=0 skipped=0
 TEMP_LOG="/tmp/puretone_$$_results.log"
 > "$TEMP_LOG"  # Initialize temporary log file
+
+# Flags to track if loudnorm options are used
+LOUDNORM_I_USED="false"
+LOUDNORM_TP_USED="false"
+LOUDNORM_LRA_USED="false"
 
 # Check for realpath dependency
 command -v realpath >/dev/null || { echo "Error: realpath not found. Install with 'apt install coreutils'."; exit 1; }
@@ -175,9 +183,9 @@ while [ ${#args[@]} -gt 0 ]; do
         --codec) ACODEC="${args[1]}"; unset 'args[1]' ;;
         --sample-rate) [[ "${args[1]}" =~ ^[0-9]+$ ]] && AR="${args[1]}" || { echo "Error: --sample-rate requires a number"; exit 1; }; unset 'args[1]' ;;
         --map-metadata) MAP_METADATA="${args[1]}"; unset 'args[1]' ;;
-        --loudnorm-I) LOUDNORM_I="${args[1]}"; unset 'args[1]' ;;
-        --loudnorm-TP) LOUDNORM_TP="${args[1]}"; unset 'args[1]' ;;
-        --loudnorm-LRA) LOUDNORM_LRA="${args[1]}"; unset 'args[1]' ;;
+        --loudnorm-I) LOUDNORM_I="${args[1]}"; LOUDNORM_I_USED="true"; unset 'args[1]' ;;
+        --loudnorm-TP) LOUDNORM_TP="${args[1]}"; LOUDNORM_TP_USED="true"; unset 'args[1]' ;;
+        --loudnorm-LRA) LOUDNORM_LRA="${args[1]}"; LOUDNORM_LRA_USED="true"; unset 'args[1]' ;;
         --volume) 
             validate_volume "${args[1]}"
             USE_VOLUME="true"
@@ -206,7 +214,7 @@ while [ ${#args[@]} -gt 0 ]; do
                 echo "Warning: --compression-level not applicable to WAV format."
                 unset 'args[1]'
             elif [ "$OUTPUT_FORMAT" = "wavpack" ]; then
-                [[ "${args[1]}" =~ ^[0-9]$ ]] && WAVPACK_COMPRESSION="${args[1]}" || { echo "Error: WavPack compression 0-6"; exit 1; }
+                [[ "${args[1]}" =~ ^[0-6]$ ]] && WAVPACK_COMPRESSION="${args[1]}" || { echo "Error: WavPack compression 0-6"; exit 1; }
                 unset 'args[1]'
             elif [ "$OUTPUT_FORMAT" = "flac" ]; then
                 [[ "${args[1]}" =~ ^([0-9]|1[0-2])$ ]] && FLAC_COMPRESSION="${args[1]}" || { echo "Error: FLAC compression 0-12"; exit 1; }
@@ -220,6 +228,13 @@ while [ ${#args[@]} -gt 0 ]; do
     unset 'args[0]'
     args=("${args[@]}")  # Reindex array
 done
+
+# Check for conflicts between --volume and loudnorm options
+if [ "$USE_VOLUME" = "true" ] && { [ "$LOUDNORM_I_USED" = "true" ] || [ "$LOUDNORM_TP_USED" = "true" ] || [ "$LOUDNORM_LRA_USED" = "true" ]; }; then
+    echo "Error: --volume cannot be used together with --loudnorm-I, --loudnorm-TP, or --loudnorm-LRA."
+    echo "Use either --volume or loudnorm options, not both."
+    exit 1
+fi
 
 # Check if AR is a multiple of 44100 Hz
 if [ $((AR % 44100)) -ne 0 ]; then
