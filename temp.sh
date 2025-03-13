@@ -12,6 +12,8 @@ PRECISION="28"              # Resampler precision (for soxr, 16-32 bits, 28 is v
 CHEBY="1"                   # Enable Chebyshev mode for soxr (1 = yes, 0 = no)
 AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"  # Audio filter (two-pass by default)
 LOUDNORM_LINEAR="false"     # Use linear (one-pass) loudness normalization (true) or two-pass (false)
+USE_VOLUME="false"          # Flag to use volume instead of loudnorm (default: false)
+VOLUME_VALUE="0dB"          # Default volume value (only used if --volume is specified)
 ENABLE_SPECTROGRAM="false"  # Enable spectrogram generation (true/false)
 SPECTROGRAM_SIZE="1920x1080"  # Default spectrogram resolution (width x height)
 SPECTROGRAM_MODE="combined"  # Default spectrogram mode (combined or separate)
@@ -50,6 +52,16 @@ validate_spectrogram_mode() {
     esac
 }
 
+# Function to validate volume value (e.g., "6dB", "-3dB")
+validate_volume() {
+    if [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?dB$ ]]; then
+        return 0
+    else
+        echo "Error: Volume must be in the format 'XdB' or '-XdB' (e.g., '6dB', '-3dB')"
+        exit 1
+    fi
+}
+
 # Function to display README
 show_help() {
     cat << 'EOF'
@@ -70,20 +82,20 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, prese
 - Run: `./puretone [format] [options] [path/to/directory | path/to/file.dsf]`
   - The directory or file path must be the last argument.
   - Examples:
-    - `./puretone flac --loudnorm-I -14 --loudnorm-linear true /path/to/music`
+    - `./puretone flac --volume 6dB /path/to/music`
     - `./puretone wavpack --skip-existing --compression-level 6 --spectrogram 1920x1080 separate 'file.dsf'`
     - `./puretone --parallel 4 /path/to/dsd`
 
 ### Configurable Parameters
 - **ACODEC**: Default: "pcm_s24le" (24-bit PCM).
-- **AR**: Default: "176400" (176.4 kHz). If you need to ensure the highest possible fidelity and avoid interpolations, always choose exact multiples of 44.1 kHz (such as 176.4 kHz, 352.8 kHz, 705.6 kHz, etc.).
+- **AR**: Default: "176400" (176.4 kHz).
 - **MAP_METADATA**: Default: "0" (copy all metadata).
 - **LOUDNORM_I**: Integrated loudness (LUFS). Default: "-16".
 - **LOUDNORM_TP**: True peak (dBTP). Default: "-1".
 - **LOUDNORM_LRA**: Loudness range (LU). Default: "11".
-- **RESAMPLER**: Resampler engine. Default: "soxr" (SoX Resampler for high quality).
-- **PRECISION**: Resampler precision (for soxr). Default: "28" (very high quality, range 16-32).
-- **CHEBY**: Chebyshev mode for soxr. Default: "1" (enabled for steeper roll-off).
+- **RESAMPLER**: Resampler engine. Default: "soxr".
+- **PRECISION**: Resampler precision (for soxr). Default: "28".
+- **CHEBY**: Chebyshev mode for soxr. Default: "1".
 - **LOUDNORM_LINEAR**: One-pass (true) or two-pass (false) loudness normalization. Default: "false".
 - **ENABLE_SPECTROGRAM**: Spectrogram generation (true/false). Default: "false".
 - **SPECTROGRAM_SIZE**: Spectrogram resolution (width x height). Default: "1920x1080".
@@ -102,19 +114,17 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, prese
 - `--loudnorm-I <value>`: Set integrated loudness in LUFS (e.g., -14).
 - `--loudnorm-TP <value>`: Set true peak in dBTP (e.g., -2).
 - `--loudnorm-LRA <value>`: Set loudness range in LU (e.g., 9).
+- `--volume <value>`: Set volume adjustment in dB (e.g., "6dB", "-3dB") instead of loudnorm.
 - `--resampler <value>`: Set resampler engine (e.g., "soxr" or "swr").
 - `--precision <value>`: Set resampler precision (e.g., "28", for soxr only).
 - `--cheby <0|1>`: Enable/disable Chebyshev mode for soxr (1 = yes, 0 = no).
 - `--loudnorm-linear <true|false>`: Use one-pass (true) or two-pass (false) loudness normalization.
-- `--spectrogram [width x height] [mode]`: Enable spectrogram generation (saved as e.g., wv/spectrogram/output.png). Optional resolution (default: 1920x1080) and mode (default: combined).
-- `--compression-level <value>`: Compression level for WavPack (0-6) or FLAC (0-12); ignored for WAV.
+- `--spectrogram [width x height] [mode]`: Enable spectrogram generation.
+- `--compression-level <value>`: Compression level for WavPack (0-6) or FLAC (0-12).
 - `--skip-existing`: Skip existing output files instead of overwriting.
 - `--parallel <number>`: Set number of parallel jobs (e.g., 4).
 - `--help`: Display this help message.
 - `path/to/directory | path/to/file.dsf`: Path to process (must be last argument; required).
-
-### Default Command for WAV
-- **Command**: `ffmpeg -i input.dsf -acodec pcm_s24le -ar 176400 -map_metadata 0 -af "aresample=resampler=soxr:precision=28:cheby=1,loudnorm=I=-16:TP=-1:LRA=11" output.wav -y`
 EOF
     exit 0
 }
@@ -136,7 +146,7 @@ declare -i overwritten=0 skipped=0
 TEMP_LOG="/tmp/puretone_$$_results.log"
 > "$TEMP_LOG"  # Initialize temporary log file
 
-# Check for realpath dependency (needed for relative paths)
+# Check for realpath dependency
 command -v realpath >/dev/null || { echo "Error: realpath not found. Install with 'apt install coreutils'."; exit 1; }
 
 # Parse arguments (directory or file must be last)
@@ -168,10 +178,16 @@ while [ ${#args[@]} -gt 0 ]; do
         --loudnorm-I) LOUDNORM_I="${args[1]}"; unset 'args[1]' ;;
         --loudnorm-TP) LOUDNORM_TP="${args[1]}"; unset 'args[1]' ;;
         --loudnorm-LRA) LOUDNORM_LRA="${args[1]}"; unset 'args[1]' ;;
-        --loudnorm-linear) [[ "${args[1]}" =~ ^(true|false)$ ]] && LOUDNORM_LINEAR="${args[1]}" || { echo "Error: --loudnorm-linear requires true/false"; exit 1; }; unset 'args[1]' ;;
+        --volume) 
+            validate_volume "${args[1]}"
+            USE_VOLUME="true"
+            VOLUME_VALUE="${args[1]}"
+            unset 'args[1]'
+            ;;
         --resampler) RESAMPLER="${args[1]}"; unset 'args[1]' ;;
         --precision) [[ "${args[1]}" =~ ^[0-9]+$ ]] && PRECISION="${args[1]}" || { echo "Error: --precision requires a number"; exit 1; }; unset 'args[1]' ;;
         --cheby) [[ "${args[1]}" =~ ^[0-1]$ ]] && CHEBY="${args[1]}" || { echo "Error: --cheby requires 0 or 1"; exit 1; }; unset 'args[1]' ;;
+        --loudnorm-linear) [[ "${args[1]}" =~ ^(true|false)$ ]] && LOUDNORM_LINEAR="${args[1]}" || { echo "Error: --loudnorm-linear requires true/false"; exit 1; }; unset 'args[1]' ;;
         --spectrogram)
             ENABLE_SPECTROGRAM="true"
             if [ ${#args[@]} -gt 1 ] && [[ "${args[1]}" =~ ^[0-9]+x[0-9]+$ ]]; then
@@ -190,7 +206,7 @@ while [ ${#args[@]} -gt 0 ]; do
                 echo "Warning: --compression-level not applicable to WAV format."
                 unset 'args[1]'
             elif [ "$OUTPUT_FORMAT" = "wavpack" ]; then
-                [[ "${args[1]}" =~ ^[0-6]$ ]] && WAVPACK_COMPRESSION="${args[1]}" || { echo "Error: WavPack compression 0-6"; exit 1; }
+                [[ "${args[1]}" =~ ^[0-9]$ ]] && WAVPACK_COMPRESSION="${args[1]}" || { echo "Error: WavPack compression 0-6"; exit 1; }
                 unset 'args[1]'
             elif [ "$OUTPUT_FORMAT" = "flac" ]; then
                 [[ "${args[1]}" =~ ^([0-9]|1[0-2])$ ]] && FLAC_COMPRESSION="${args[1]}" || { echo "Error: FLAC compression 0-12"; exit 1; }
@@ -214,11 +230,15 @@ if [ $((AR % 44100)) -ne 0 ]; then
     echo "Recommended values: 44100, 88200, 176400, 352800, 705600"
 fi
 
-# Adjust AF based on LOUDNORM_LINEAR and resampler settings
-if [ "$LOUDNORM_LINEAR" = "true" ]; then
-    AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:linear=true"
+# Adjust AF based on USE_VOLUME, LOUDNORM_LINEAR, and resampler settings
+if [ "$USE_VOLUME" = "true" ]; then
+    AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,volume=$VOLUME_VALUE"
 else
-    AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"
+    if [ "$LOUDNORM_LINEAR" = "true" ]; then
+        AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:linear=true"
+    else
+        AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"
+    fi
 fi
 
 # Set OUTPUT_BASE_DIR
@@ -230,7 +250,7 @@ case "$OUTPUT_FORMAT" in
 esac
 
 # Export variables for parallel
-export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR ENABLE_SPECTROGRAM SPECTROGRAM_SIZE SPECTROGRAM_MODE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG WORKING_DIR
+export ACODEC AR MAP_METADATA AF LOUDNORM_LINEAR USE_VOLUME VOLUME_VALUE ENABLE_SPECTROGRAM SPECTROGRAM_SIZE SPECTROGRAM_MODE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG WORKING_DIR
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -251,7 +271,8 @@ echo "  Audio codec (--codec): $ACODEC"
 echo "  Sample rate (--sample-rate): $AR"
 echo "  Metadata mapping (--map-metadata): $MAP_METADATA"
 echo "  Audio filter (-af): $AF"
-echo "  Loudnorm linear mode: $LOUDNORM_LINEAR (true = one-pass, false = two-pass)"
+echo "  Loudnorm linear mode: $LOUDNORM_LINEAR (true = one-pass, false = two-pass, ignored if --volume is used)"
+echo "  Use volume instead of loudnorm: $USE_VOLUME (value: $VOLUME_VALUE)"
 echo "  Base output directory: $OUTPUT_BASE_DIR"
 echo "  Spectrogram generation enabled: $ENABLE_SPECTROGRAM"
 [ "$ENABLE_SPECTROGRAM" = "true" ] && echo "  Spectrogram resolution: $SPECTROGRAM_SIZE"
