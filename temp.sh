@@ -4,13 +4,13 @@
 ACODEC="pcm_s24le"          # Audio codec for WAV intermediate file
 AR="176400"                 # Sample rate
 MAP_METADATA="0"            # Metadata mapping
-LOUDNORM_I="-18"            # Integrated loudness target (LUFS) - alterado de -16 para -18
+LOUDNORM_I="-18"            # Integrated loudness target (LUFS)
 LOUDNORM_TP="-1"            # True peak limit (dBTP)
-LOUDNORM_LRA="12"           # Loudness range (LU) - alterado de 11 para 12
+LOUDNORM_LRA="12"           # Loudness range (LU)
 RESAMPLER="soxr"            # Resampler engine (soxr = SoX Resampler, swr = FFmpeg's default)
 PRECISION="28"              # Resampler precision (for soxr, 16-32 bits, 28 is very high quality)
 CHEBY="1"                   # Enable Chebyshev mode for soxr (1 = yes, 0 = no)
-AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"  # Audio filter (padrão atualizado)
+AF="aresample=resampler=$RESAMPLER:precision=$PRECISION:cheby=$CHEBY,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA"  # Audio filter
 LOUDNORM_LINEAR="false"     # Use linear (one-pass) loudness normalization (true) or two-pass (false)
 USE_VOLUME="false"          # Flag to use volume instead of loudnorm (default: false)
 VOLUME_VALUE="0dB"          # Default volume value (only used if --volume is specified)
@@ -110,7 +110,7 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats, prese
 - `<format>`: Output format: "wav", "wavpack", or "flac" (default: "wav").
 - `--codec <value>`: Set audio codec (e.g., "pcm_s24le").
 - `--sample-rate <value>`: Set sample rate (e.g., "176400").
-- `--map-metadata <value>`: Set metadata mapping (e.g., "0").
+- `--map-metadata <value>`: Set metadata mapping (e.g., "0" to copy metadata).
 - `--loudnorm-I <value>`: Set integrated loudness in LUFS (e.g., -14).
 - `--loudnorm-TP <value>`: Set true peak in dBTP (e.g., -2).
 - `--loudnorm-LRA <value>`: Set loudness range in LU (e.g., 9).
@@ -360,7 +360,7 @@ process_file() {
         touch "$OUTPUT_DIR/.processed"
     fi
 
-    # Convert DSD to WAV
+    # Convert DSD to WAV with metadata
     ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$AF" "$wav_temp_file" -y >> "$log_file" 2>&1
     if [ $? -ne 0 ]; then
         echo "Error converting $input_file to intermediate WAV" >&2
