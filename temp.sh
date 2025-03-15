@@ -250,6 +250,27 @@ case "$OUTPUT_FORMAT" in
 esac
 echo ""
 
+# Display FFmpeg commands for each pass
+echo "FFmpeg commands used for conversion:"
+echo "  First Pass (Loudness Analysis):"
+echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:print_format=summary' -f null -"
+echo "  Second Pass (Normalization and Conversion):"
+case "$OUTPUT_FORMAT" in
+    "wav")
+        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir}/${base_name}.wav -y"
+        ;;
+    "wavpack")
+        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir}/${base_name}_temp.wav -y"
+        echo "    ffmpeg -i <output_dir}/${base_name}_temp.wav -acodec wavpack -compression_level $WAVPACK_COMPRESSION <output_dir}/${base_name}.wv -y"
+        ;;
+    "flac")
+        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir}/${base_name}_temp.wav -y"
+        echo "    ffmpeg -i <output_dir}/${base_name}_temp.wav -acodec flac -compression_level $FLAC_COMPRESSION <output_dir}/${base_name}.flac -y"
+        ;;
+esac
+echo "  Note: '<measured_values>' in the second pass includes measured_I, measured_LRA, measured_TP, and measured_thresh extracted from the first pass."
+echo ""
+
 # Function to process a single file
 process_file() {
     local input_file="$1"
