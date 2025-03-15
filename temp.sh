@@ -7,6 +7,7 @@ MAP_METADATA="0"            # Metadata mapping
 LOUDNORM_I="-14"            # Integrated loudness target (LUFS)
 LOUDNORM_TP="-1"            # True peak limit (dBTP)
 LOUDNORM_LRA="20"           # Loudness range (LU)
+VOLUME=""                   # Volume adjustment in dB (empty by default, overrides loudnorm if set)
 RESAMPLER="soxr"            # Resampler engine (soxr = SoX Resampler, swr = FFmpeg's default)
 PRECISION="28"              # Resampler precision (for soxr, 16-32 bits, 28 is very high quality)
 CHEBY="1"                   # Enable Chebyshev mode for soxr (1 = yes, 0 = no)
@@ -17,9 +18,10 @@ FLAC_COMPRESSION="0"        # FLAC compression level (0-12)
 OVERWRITE="true"            # Overwrite existing files by default (true/false)
 PARALLEL_JOBS=2             # Number of parallel jobs (default: 2)
 WORKING_DIR="$(pwd)"        # Default to current directory
-ENABLE_SPECTROGRAM="false"  # Enable spectrogram generation (true/false)
-SPECTROGRAM_SIZE="1920x1080"  # Default spectrogram resolution (width x height)
-SPECTROGRAM_MODE="combined"  # Default spectrogram mode (combined or separate)
+ENABLE_VISUALIZATION="false"  # Enable visualization (waveform or spectrogram)
+VISUALIZATION_TYPE="spectrogram"  # Default visualization type
+VISUALIZATION_SIZE="1920x1080"    # Default visualization resolution
+SPECTROGRAM_MODE="combined"       # Default spectrogram mode (combined or separate)
 
 # Function to normalize paths (remove double slashes)
 normalize_path() {
@@ -31,22 +33,19 @@ validate_resolution() {
     if [[ "$1" =~ ^[0-9]+x[0-9]+$ ]]; then
         return 0
     else
-        echo "Error: Spectrogram resolution must be in the format 'width x height' (e.g., 1920x1080)"
+        echo "Error: Visualization resolution must be in the format 'width x height' (e.g., 1920x1080)"
         exit 1
     fi
 }
 
-# Function to validate spectrogram mode
-validate_spectrogram_mode() {
-    case "$1" in
-        "combined"|"separate")
-            return 0
-            ;;
-        *)
-            echo "Error: Invalid spectrogram mode '$1'. Valid options: combined, separate"
-            exit 1
-            ;;
-    esac
+# Function to validate volume format (e.g., "3dB" or "-2.5dB")
+validate_volume() {
+    if [[ "$1" =~ ^[-+]?[0-9]*\.?[0-9]+dB$ ]]; then
+        return 0
+    else
+        echo "Error: Volume must be in the format 'XdB' or '-X.XdB' (e.g., '3dB', '-2.5dB')"
+        exit 1
+    fi
 }
 
 # Function to display README
@@ -59,19 +58,20 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
 ### How it Works
 1. **Input**: Accepts a single .dsf file or scans the specified/current directory for .dsf files or subdirectories.
 2. **Two-Pass Conversion**:
-   - Pass 1: Analyzes loudness metrics (I, LRA, TP, threshold) using ffmpeg with -f null.
-   - Pass 2: Applies normalization using measured values to generate the output file.
+   - Pass 1: Analyzes loudness metrics (I, LRA, TP, threshold) using ffmpeg with -f null (if using loudnorm).
+   - Pass 2: Applies normalization or volume adjustment to generate the output file.
 3. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata.
 4. **Output**: Files are saved in 'wv/', 'wvpk/', or 'flac/' subdirectories.
 5. **Logging**: Details saved in log.txt per directory.
-6. **Spectrogram (Optional)**: Generates spectrogram images if enabled.
+6. **Visualization (Optional)**: Generates waveform or spectrogram images if enabled.
 
 ### Usage
-- Save as `puretone`, make executable: `chmod +x puretone`.
-- Run: `./puretone [format] [options] [path/to/directory | path/to/file.dsf]`
+- Save as `puretone.sh`, make executable: `chmod +x puretone.sh`.
+- Run: `./puretone.sh [format] [options] [path/to/directory | path/to/file.dsf]`
   - Examples:
-    - `./puretone wav /path/to/file.dsf`
-    - `./puretone flac --loudnorm-I -14 --parallel 4 /path/to/music`
+    - `./puretone.sh wav /path/to/file.dsf`
+    - `./puretone.sh wavpack --spectrogram 1920x1080 waveform --volume 3dB /path/to/music`
+    - `./puretone.sh flac --loudnorm-I -14 --parallel 4 /path/to/music`
 
 ### Configurable Parameters
 - **ACODEC**: Default: "pcm_s24le" (24-bit PCM).
@@ -80,11 +80,13 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
 - **LOUDNORM_I**: Integrated loudness (LUFS). Default: "-14".
 - **LOUDNORM_TP**: True peak (dBTP). Default: "-1".
 - **LOUDNORM_LRA**: Loudness range (LU). Default: "20".
+- **VOLUME**: Volume adjustment (dB). Default: unset (uses loudnorm instead).
 - **RESAMPLER**: Resampler engine. Default: "soxr".
 - **PRECISION**: Resampler precision (for soxr). Default: "28".
 - **CHEBY**: Chebyshev mode for soxr. Default: "1".
-- **ENABLE_SPECTROGRAM**: Spectrogram generation (true/false). Default: "false".
-- **SPECTROGRAM_SIZE**: Spectrogram resolution. Default: "1920x1080".
+- **ENABLE_VISUALIZATION**: Visualization generation (true/false). Default: "false".
+- **VISUALIZATION_TYPE**: "waveform" or "spectrogram". Default: "spectrogram".
+- **VISUALIZATION_SIZE**: Visualization resolution. Default: "1920x1080".
 - **SPECTROGRAM_MODE**: Spectrogram mode (combined/separate). Default: "combined".
 - **OUTPUT_FORMAT**: "wav", "wavpack", "flac". Default: "wav".
 - **WAVPACK_COMPRESSION**: 0-6. Default: "0".
@@ -100,10 +102,11 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
 - `--loudnorm-I <value>`: Set integrated loudness (e.g., -14).
 - `--loudnorm-TP <value>`: Set true peak (e.g., -2).
 - `--loudnorm-LRA <value>`: Set loudness range (e.g., 20).
+- `--volume <value>`: Set volume adjustment in dB (e.g., "3dB", overrides loudnorm).
 - `--resampler <value>`: Set resampler engine (e.g., "soxr").
 - `--precision <value>`: Set resampler precision (e.g., "28").
 - `--cheby <0|1>`: Enable/disable Chebyshev mode (1 = yes, 0 = no).
-- `--spectrogram [width x height] [mode]`: Enable spectrogram generation.
+- `--spectrogram [width x height] [type] [mode]`: Enable visualization (type: waveform or spectrogram; mode: combined or separate for spectrogram).
 - `--compression-level <value>`: Compression level for WavPack/FLAC.
 - `--skip-existing`: Skip existing output files.
 - `--parallel <number>`: Set number of parallel jobs (e.g., 4).
@@ -152,7 +155,7 @@ fi
 while [ ${#args[@]} -gt 0 ]; do
     arg="${args[0]}"
     case "$arg" in
-        "wav"|"wavpack"|"バンド")
+        "wav"|"wavpack"|"flac")
             OUTPUT_FORMAT="$arg"
             ;;
         --codec) ACODEC="${args[1]}"; unset 'args[1]' ;;
@@ -161,19 +164,43 @@ while [ ${#args[@]} -gt 0 ]; do
         --loudnorm-I) LOUDNORM_I="${args[1]}"; unset 'args[1]' ;;
         --loudnorm-TP) LOUDNORM_TP="${args[1]}"; unset 'args[1]' ;;
         --loudnorm-LRA) LOUDNORM_LRA="${args[1]}"; unset 'args[1]' ;;
+        --volume) validate_volume "${args[1]}"; VOLUME="${args[1]}"; unset 'args[1]' ;;
         --resampler) RESAMPLER="${args[1]}"; unset 'args[1]' ;;
         --precision) [[ "${args[1]}" =~ ^[0-9]+$ ]] && PRECISION="${args[1]}" || { echo "Error: --precision requires a number"; exit 1; }; unset 'args[1]' ;;
         --cheby) [[ "${args[1]}" =~ ^[0-1]$ ]] && CHEBY="${args[1]}" || { echo "Error: --cheby requires 0 or 1"; exit 1; }; unset 'args[1]' ;;
         --spectrogram)
-            ENABLE_SPECTROGRAM="true"
+            ENABLE_VISUALIZATION="true"
             if [ ${#args[@]} -gt 1 ] && [[ "${args[1]}" =~ ^[0-9]+x[0-9]+$ ]]; then
                 validate_resolution "${args[1]}"
-                SPECTROGRAM_SIZE="${args[1]}"
+                VISUALIZATION_SIZE="${args[1]}"
                 unset 'args[1]'
                 if [ ${#args[@]} -gt 1 ]; then
-                    validate_spectrogram_mode "${args[1]}"
-                    SPECTROGRAM_MODE="${args[1]}"
-                    unset 'args[1]'
+                    case "${args[1]}" in
+                        "waveform")
+                            VISUALIZATION_TYPE="waveform"
+                            unset 'args[1]'
+                            ;;
+                        "spectrogram")
+                            VISUALIZATION_TYPE="spectrogram"
+                            unset 'args[1]'
+                            if [ ${#args[@]} -gt 1 ]; then
+                                case "${args[2]}" in
+                                    "combined"|"separate")
+                                        SPECTROGRAM_MODE="${args[2]}"
+                                        unset 'args[2]'
+                                        ;;
+                                    *)
+                                        echo "Error: Invalid spectrogram mode '${args[2]}'. Valid options: combined, separate"
+                                        exit 1
+                                        ;;
+                                esac
+                            fi
+                            ;;
+                        *)
+                            echo "Error: Invalid visualization type '${args[1]}'. Use 'waveform' or 'spectrogram' (optional: followed by 'combined' or 'separate' for spectrogram)"
+                            exit 1
+                            ;;
+                    esac
                 fi
             fi
             ;;
@@ -215,7 +242,7 @@ case "$OUTPUT_FORMAT" in
 esac
 
 # Export variables for parallel
-export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG WORKING_DIR ENABLE_SPECTROGRAM SPECTROGRAM_SIZE SPECTROGRAM_MODE
+export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA VOLUME RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG WORKING_DIR ENABLE_VISUALIZATION VISUALIZATION_TYPE VISUALIZATION_SIZE SPECTROGRAM_MODE
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -235,14 +262,19 @@ echo "  Working directory: $WORKING_DIR"
 echo "  Audio codec (--codec): $ACODEC"
 echo "  Sample rate (--sample-rate): $AR"
 echo "  Metadata mapping (--map-metadata): $MAP_METADATA"
-echo "  Loudnorm I (--loudnorm-I): $LOUDNORM_I"
-echo "  Loudnorm TP (--loudnorm-TP): $LOUDNORM_TP"
-echo "  Loudnorm LRA (--loudnorm-LRA): $LOUDNORM_LRA"
+if [ -n "$VOLUME" ]; then
+    echo "  Volume adjustment (--volume): $VOLUME"
+else
+    echo "  Loudnorm I (--loudnorm-I): $LOUDNORM_I"
+    echo "  Loudnorm TP (--loudnorm-TP): $LOUDNORM_TP"
+    echo "  Loudnorm LRA (--loudnorm-LRA): $LOUDNORM_LRA"
+fi
 echo "  Resampler: $RESAMPLER (precision: $PRECISION, Chebyshev: $CHEBY)"
 echo "  Base output directory: $OUTPUT_BASE_DIR"
-echo "  Spectrogram generation enabled: $ENABLE_SPECTROGRAM"
-[ "$ENABLE_SPECTROGRAM" = "true" ] && echo "  Spectrogram resolution: $SPECTROGRAM_SIZE"
-[ "$ENABLE_SPECTROGRAM" = "true" ] && echo "  Spectrogram mode: $SPECTROGRAM_MODE"
+echo "  Visualization enabled: $ENABLE_VISUALIZATION"
+[ "$ENABLE_VISUALIZATION" = "true" ] && echo "  Visualization type: $VISUALIZATION_TYPE"
+[ "$ENABLE_VISUALIZATION" = "true" ] && echo "  Visualization resolution: $VISUALIZATION_SIZE"
+[ "$ENABLE_VISUALIZATION" = "true" ] && [ "$VISUALIZATION_TYPE" = "spectrogram" ] && echo "  Spectrogram mode: $SPECTROGRAM_MODE"
 echo "  Output format: $OUTPUT_FORMAT"
 echo "  Overwrite existing files: $OVERWRITE (overridden by --skip-existing: $SKIP_EXISTING)"
 echo "  Parallel jobs: $PARALLEL_JOBS"
@@ -252,25 +284,42 @@ case "$OUTPUT_FORMAT" in
 esac
 echo ""
 
-# Display FFmpeg commands for each pass (corrected version)
+# Display FFmpeg commands for each pass
 echo "FFmpeg commands used for conversion:"
-echo "  First Pass (Loudness Analysis):"
-echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:print_format=summary' -f null -"
-echo "  Second Pass (Normalization and Conversion):"
-case "$OUTPUT_FORMAT" in
-    "wav")
-        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}.wav -y"
-        ;;
-    "wavpack")
-        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}_intermediate.wav -y"
-        echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec wavpack -compression_level $WAVPACK_COMPRESSION <output_dir>/\${base_name}.wv -y"
-        ;;
-    "flac")
-        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}_intermediate.wav -y"
-        echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec flac -compression_level $FLAC_COMPRESSION <output_dir>/\${base_name}.flac -y"
-        ;;
-esac
-echo "  Note: '<measured_values>' in the second pass includes measured_I, measured_LRA, measured_TP, and measured_thresh extracted from the first pass."
+if [ -n "$VOLUME" ]; then
+    echo "  Single Pass (Volume Adjustment and Conversion):"
+    case "$OUTPUT_FORMAT" in
+        "wav")
+            echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=$VOLUME' <output_dir>/\${base_name}.wav -y"
+            ;;
+        "wavpack")
+            echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=$VOLUME' <output_dir>/\${base_name}_intermediate.wav -y"
+            echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec wavpack -compression_level $WAVPACK_COMPRESSION <output_dir>/\${base_name}.wv -y"
+            ;;
+        "flac")
+            echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=$VOLUME' <output_dir>/\${base_name}_intermediate.wav -y"
+            echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec flac -compression_level $FLAC_COMPRESSION <output_dir>/\${base_name}.flac -y"
+            ;;
+    esac
+else
+    echo "  First Pass (Loudness Analysis):"
+    echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:print_format=summary' -f null -"
+    echo "  Second Pass (Normalization and Conversion):"
+    case "$OUTPUT_FORMAT" in
+        "wav")
+            echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}.wav -y"
+            ;;
+        "wavpack")
+            echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}_intermediate.wav -y"
+            echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec wavpack -compression_level $WAVPACK_COMPRESSION <output_dir>/\${base_name}.wv -y"
+            ;;
+        "flac")
+            echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}_intermediate.wav -y"
+            echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec flac -compression_level $FLAC_COMPRESSION <output_dir>/\${base_name}.flac -y"
+            ;;
+    esac
+    echo "  Note: '<measured_values>' in the second pass includes measured_I, measured_LRA, measured_TP, and measured_thresh extracted from the first pass."
+fi
 echo "  Note: '\${base_name}' is derived from the input file name without the .dsf extension."
 echo ""
 
@@ -288,8 +337,8 @@ process_file() {
         return 1
     fi
 
-    # Create SPECTROGRAM_DIR if spectrogram is enabled
-    if [ "$ENABLE_SPECTROGRAM" = "true" ]; then
+    # Create SPECTROGRAM_DIR if visualization is enabled
+    if [ "$ENABLE_VISUALIZATION" = "true" ]; then
         if ! mkdir -p "$SPECTROGRAM_DIR"; then
             echo "Error: Failed to create directory $SPECTROGRAM_DIR" >&2
             echo "$dir:error" >> "$TEMP_LOG"
@@ -309,7 +358,7 @@ process_file() {
         "wavpack") output_file=$(normalize_path "$OUTPUT_DIR/$base_name.wv") ;;
         "flac") output_file=$(normalize_path "$OUTPUT_DIR/$base_name.flac") ;;
     esac
-    spectrogram_file=$(normalize_path "$SPECTROGRAM_DIR/$base_name.png")
+    visualization_file=$(normalize_path "$SPECTROGRAM_DIR/$base_name.png")
     log_file=$(normalize_path "$OUTPUT_DIR/log.txt")
 
     # Check if output file exists
@@ -332,39 +381,52 @@ process_file() {
         touch "$OUTPUT_DIR/.processed"
     fi
 
-    # First pass: Analyze loudness metrics
-    local af_first_pass="$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:print_format=summary"
-    ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$af_first_pass" -f null - >> "$log_file" 2>&1
-    if [ $? -ne 0 ]; then
-        echo "Error analyzing loudness for $input_file" >&2
-        echo "Check $log_file for details" >&2
-        echo "$dir:error" >> "$TEMP_LOG"
-        return 1
-    fi
+    if [ -n "$VOLUME" ]; then
+        # Single pass with volume adjustment
+        local af_pass="$AF_BASE,volume=$VOLUME"
+        ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$af_pass" "$wav_intermediate_file" -y >> "$log_file" 2>&1
+        if [ $? -ne 0 ]; then
+            echo "Error applying volume adjustment to $input_file" >&2
+            echo "Check $log_file for details" >&2
+            rm -f "$wav_intermediate_file"
+            echo "$dir:error" >> "$TEMP_LOG"
+            return 1
+        fi
+    else
+        # First pass: Analyze loudness metrics
+        local af_first_pass="$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:print_format=summary"
+        ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$af_first_pass" -f null - >> "$log_file" 2>&1
+        if [ $? -ne 0 ]; then
+            echo "Error analyzing loudness for $input_file" >&2
+            echo "Check $log_file for details" >&2
+            echo "$dir:error" >> "$TEMP_LOG"
+            return 1
+        fi
 
-    # Extract measured values from log
-    measured_I=$(grep "Input Integrated:" "$log_file" | tail -1 | sed 's/.*: *\([-0-9.]*\).*/\1/')
-    measured_LRA=$(grep "Input LRA:" "$log_file" | tail -1 | sed 's/.*: *\([0-9.]*\).*/\1/')
-    measured_TP=$(grep "Input True Peak:" "$log_file" | tail -1 | sed 's/.*: *\([-0-9.]*\).*/\1/')
-    measured_thresh=$(grep "Input Threshold:" "$log_file" | tail -1 | sed 's/.*: *\([-0-9.]*\).*/\1/')
+        # Extract measured values from log
+        measured_I=$(grep "Input Integrated:" "$log_file" | tail -1 | sed 's/.*: *\([-0-9.]*\).*/\1/')
+        measured_LRA=$(grep "Input LRA:" "$log_file" | tail -1 | sed 's/.*: *\([0-9.]*\).*/\1/')
+        measured_TP=$(grep "Input True Peak:" "$log_file" | tail -1 | sed 's/.*: *\([-0-9.]*\).*/\1/')
+        measured_thresh=$(grep "Input Threshold:" "$log_file" | tail -1 | sed 's/.*: *\([-0-9.]*\).*/\1/')
 
-    # Check if metrics were extracted successfully
-    if [ -z "$measured_I" ] || [ -z "$measured_LRA" ] || [ -z "$measured_TP" ] || [ -z "$measured_thresh" ]; then
-        echo "Error: Failed to extract loudness metrics for $input_file" >&2
-        echo "Check $log_file for details" >&2
-        echo "$dir:error" >> "$TEMP_LOG"
-        return 1
-    fi
+        # Check if metrics were extracted successfully
+        if [ -z "$measured_I" ] || [ -z "$measured_LRA" ] || [ -z "$measured_TP" ] || [ -z "$measured_thresh" ]; then
+            echo "Error: Failed to extract loudness metrics for $input_file" >&2
+            echo "Check $log_file for details" >&2
+            echo "$dir:error" >> "$TEMP_LOG"
+            return 1
+        fi
 
-    # Second pass: Apply normalization with measured values
-    local af_second_pass="$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:measured_I=$measured_I:measured_LRA=$measured_LRA:measured_TP=$measured_TP:measured_thresh=$measured_thresh"
-    ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$af_second_pass" "$wav_intermediate_file" -y >> "$log_file" 2>&1
-    if [ $? -ne 0 ]; then
-        echo "Error converting $input_file to intermediate WAV" >&2
-        echo "Check $log_file for details" >&2
-        rm -f "$wav_intermediate_file"
-        echo "$dir:error" >> "$TEMP_LOG"
-        return 1
+        # Second pass: Apply normalization with measured values
+        local af_second_pass="$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:measured_I=$measured_I:measured_LRA=$measured_LRA:measured_TP=$measured_TP:measured_thresh=$measured_thresh"
+        ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$af_second_pass" "$wav_intermediate_file" -y >> "$log_file" 2>&1
+        if [ $? -ne 0 ]; then
+            echo "Error converting $input_file to intermediate WAV" >&2
+            echo "Check $log_file for details" >&2
+            rm -f "$wav_intermediate_file"
+            echo "$dir:error" >> "$TEMP_LOG"
+            return 1
+        fi
     fi
 
     # Calculate intermediate WAV size in MiB
@@ -404,16 +466,20 @@ process_file() {
         return 1
     fi
 
-    # Generate spectrogram if enabled
-    if [ "$ENABLE_SPECTROGRAM" = "true" ]; then
-        ffmpeg -i "$output_file" -lavfi "showspectrumpic=s=$SPECTROGRAM_SIZE:mode=$SPECTROGRAM_MODE" "$spectrogram_file" -y >> "$log_file" 2>&1
+    # Generate visualization if enabled
+    if [ "$ENABLE_VISUALIZATION" = "true" ]; then
+        if [ "$VISUALIZATION_TYPE" = "waveform" ]; then
+            ffmpeg -i "$output_file" -filter_complex "showwavespic=s=$VISUALIZATION_SIZE" "$visualization_file" -y >> "$log_file" 2>&1
+        else  # spectrogram
+            ffmpeg -i "$output_file" -lavfi "showspectrumpic=s=$VISUALIZATION_SIZE:mode=$SPECTROGRAM_MODE" "$visualization_file" -y >> "$log_file" 2>&1
+        fi
         if [ $? -ne 0 ]; then
-            echo "Error generating spectrogram for $output_file" >&2
+            echo "Error generating $VISUALIZATION_TYPE for $output_file" >&2
             echo "Check $log_file for details" >&2
             echo "$dir:error" >> "$TEMP_LOG"
             return 1
         fi
-        echo "Generated spectrogram: $spectrogram_file"
+        echo "Generated $VISUALIZATION_TYPE: $visualization_file"
     fi
 
     echo "Converted: $input_file -> $output_file"
@@ -430,7 +496,7 @@ cleanup() {
 trap cleanup INT TERM
 
 # Export the function for parallel
-export -f process_file normalize_path
+export -f process_file normalize_path validate_volume
 
 # Change to the working directory
 cd "$WORKING_DIR" || { echo "Error: Cannot change to directory $WORKING_DIR"; exit 1; }
@@ -521,7 +587,7 @@ if [ ${#log_files[@]} -gt 0 ]; then
     [ $overwritten -gt 0 ] && echo "Files overwritten: $overwritten"
     [ $skipped -gt 0 ] && echo "Files skipped: $skipped"
 fi
-[ "$ENABLE_SPECTROGRAM" = "true" ] && echo "Spectrograms saved in each output directory under spectrogram/."
+[ "$ENABLE_VISUALIZATION" = "true" ] && echo "Visualizations saved in each output directory under spectrogram/."
 
 echo "Elapsed time: $ELAPSED_TIME seconds"
 
