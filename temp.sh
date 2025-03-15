@@ -128,7 +128,9 @@ fi
 SKIP_EXISTING="false"
 declare -i overwritten=0 skipped=0
 TEMP_LOG="/tmp/puretone_$$_results.log"
+TEMP_SIZE_LOG="/tmp/puretone_$$_sizes.log"  # Temporary file to store size info
 > "$TEMP_LOG"  # Initialize temporary log file
+> "$TEMP_SIZE_LOG"  # Initialize temporary size log file
 
 # Parse arguments (directory or file must be last)
 args=("$@")
@@ -150,7 +152,7 @@ fi
 while [ ${#args[@]} -gt 0 ]; do
     arg="${args[0]}"
     case "$arg" in
-        "wav"|"wavpack"|"flac")
+        "wav"|"wavpack"|"バンド")
             OUTPUT_FORMAT="$arg"
             ;;
         --codec) ACODEC="${args[1]}"; unset 'args[1]' ;;
@@ -213,7 +215,7 @@ case "$OUTPUT_FORMAT" in
 esac
 
 # Export variables for parallel
-export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG WORKING_DIR ENABLE_SPECTROGRAM SPECTROGRAM_SIZE SPECTROGRAM_MODE
+export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG WORKING_DIR ENABLE_SPECTROGRAM SPECTROGRAM_SIZE SPECTROGRAM_MODE
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -250,25 +252,26 @@ case "$OUTPUT_FORMAT" in
 esac
 echo ""
 
-# Display FFmpeg commands for each pass
+# Display FFmpeg commands for each pass (corrected version)
 echo "FFmpeg commands used for conversion:"
 echo "  First Pass (Loudness Analysis):"
 echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:print_format=summary' -f null -"
 echo "  Second Pass (Normalization and Conversion):"
 case "$OUTPUT_FORMAT" in
     "wav")
-        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir}/${base_name}.wav -y"
+        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}.wav -y"
         ;;
     "wavpack")
-        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir}/${base_name}_temp.wav -y"
-        echo "    ffmpeg -i <output_dir}/${base_name}_temp.wav -acodec wavpack -compression_level $WAVPACK_COMPRESSION <output_dir}/${base_name}.wv -y"
+        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}_intermediate.wav -y"
+        echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec wavpack -compression_level $WAVPACK_COMPRESSION <output_dir>/\${base_name}.wv -y"
         ;;
     "flac")
-        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir}/${base_name}_temp.wav -y"
-        echo "    ffmpeg -i <output_dir}/${base_name}_temp.wav -acodec flac -compression_level $FLAC_COMPRESSION <output_dir}/${base_name}.flac -y"
+        echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '<measured_values>' <output_dir>/\${base_name}_intermediate.wav -y"
+        echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec flac -compression_level $FLAC_COMPRESSION <output_dir>/\${base_name}.flac -y"
         ;;
 esac
 echo "  Note: '<measured_values>' in the second pass includes measured_I, measured_LRA, measured_TP, and measured_thresh extracted from the first pass."
+echo "  Note: '\${base_name}' is derived from the input file name without the .dsf extension."
 echo ""
 
 # Function to process a single file
@@ -300,7 +303,7 @@ process_file() {
 
     # Define file names with absolute paths
     base_name=$(basename "$input_file" .dsf)
-    wav_temp_file=$(normalize_path "$OUTPUT_DIR/${base_name}_temp.wav")
+    wav_intermediate_file=$(normalize_path "$OUTPUT_DIR/${base_name}_intermediate.wav")
     case "$OUTPUT_FORMAT" in
         "wav") output_file=$(normalize_path "$OUTPUT_DIR/$base_name.wav") ;;
         "wavpack") output_file=$(normalize_path "$OUTPUT_DIR/$base_name.wv") ;;
@@ -355,28 +358,44 @@ process_file() {
 
     # Second pass: Apply normalization with measured values
     local af_second_pass="$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:measured_I=$measured_I:measured_LRA=$measured_LRA:measured_TP=$measured_TP:measured_thresh=$measured_thresh"
-    ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$af_second_pass" "$wav_temp_file" -y >> "$log_file" 2>&1
+    ffmpeg -i "$input_file" -acodec "$ACODEC" -ar "$AR" -map_metadata "$MAP_METADATA" -af "$af_second_pass" "$wav_intermediate_file" -y >> "$log_file" 2>&1
     if [ $? -ne 0 ]; then
         echo "Error converting $input_file to intermediate WAV" >&2
         echo "Check $log_file for details" >&2
-        rm -f "$wav_temp_file"
+        rm -f "$wav_intermediate_file"
         echo "$dir:error" >> "$TEMP_LOG"
         return 1
     fi
 
+    # Calculate intermediate WAV size in MiB
+    intermediate_size=$(stat -c %s "$wav_intermediate_file" 2>/dev/null || echo 0)
+    intermediate_mib=$(echo "scale=2; $intermediate_size / 1048576" | bc)
+
     # Convert to final format
     case "$OUTPUT_FORMAT" in
-        "wav") mv "$wav_temp_file" "$output_file" || { echo "Error moving $wav_temp_file to $output_file" >&2; echo "$dir:error" >> "$TEMP_LOG"; return 1; } ;;
-        "wavpack") ffmpeg -i "$wav_temp_file" -acodec wavpack -compression_level "$WAVPACK_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1 ;;
-        "flac") ffmpeg -i "$wav_temp_file" -acodec flac -compression_level "$FLAC_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1 ;;
+        "wav") mv "$wav_intermediate_file" "$output_file" || { echo "Error moving $wav_intermediate_file to $output_file" >&2; echo "$dir:error" >> "$TEMP_LOG"; return 1; } ;;
+        "wavpack") ffmpeg -i "$wav_intermediate_file" -acodec wavpack -compression_level "$WAVPACK_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1 ;;
+        "flac") ffmpeg -i "$wav_intermediate_file" -acodec flac -compression_level "$FLAC_COMPRESSION" "$output_file" -y >> "$log_file" 2>&1 ;;
     esac
     if [ $? -ne 0 ]; then
         echo "Error converting $input_file to $OUTPUT_FORMAT" >&2
-        rm -f "$wav_temp_file"
+        rm -f "$wav_intermediate_file"
         echo "$dir:error" >> "$TEMP_LOG"
         return 1
     fi
-    rm -f "$wav_temp_file"
+
+    # Calculate sizes in MiB and store in temporary size log
+    input_size=$(stat -c %s "$input_file" 2>/dev/null || echo 0)
+    output_size=$(stat -c %s "$output_file" 2>/dev/null || echo 0)
+    input_mib=$(echo "scale=2; $input_size / 1048576" | bc)
+    output_mib=$(echo "scale=2; $output_size / 1048576" | bc)
+    if [ "$input_size" -gt 0 ] && [ "$output_size" -gt 0 ] && [ "$intermediate_size" -gt 0 ]; then
+        diff_percent=$(echo "scale=2; (($output_mib - $input_mib) / $input_mib) * 100" | bc)
+        echo "$input_file:$input_mib:$wav_intermediate_file:$intermediate_mib:$output_file:$output_mib:$diff_percent" >> "$TEMP_SIZE_LOG"
+    fi
+
+    # Remove intermediate file
+    rm -f "$wav_intermediate_file"
 
     # Verify output integrity
     if [ ! -s "$output_file" ]; then
@@ -404,8 +423,8 @@ process_file() {
 # Cleanup function for interruption
 cleanup() {
     echo "Script interrupted. Cleaning up temporary files..."
-    find "$WORKING_DIR" -name "*_temp.wav" -delete
-    rm -f "$TEMP_LOG"
+    find "$WORKING_DIR" -name "*_intermediate.wav" -delete
+    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG"
     exit 1
 }
 trap cleanup INT TERM
@@ -452,18 +471,18 @@ else
                     ;;
                 [Nn]*)
                     echo "Aborting conversion."
-                    rm -f "$TEMP_LOG"
+                    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG"
                     exit 0
                     ;;
                 *)
                     echo "Invalid response. Aborting conversion."
-                    rm -f "$TEMP_LOG"
+                    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG"
                     exit 1
                     ;;
             esac
         else
             echo "No .dsf files found in $WORKING_DIR or its subdirectories."
-            rm -f "$TEMP_LOG"
+            rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG"
             exit 1
         fi
     fi
@@ -505,6 +524,21 @@ fi
 [ "$ENABLE_SPECTROGRAM" = "true" ] && echo "Spectrograms saved in each output directory under spectrogram/."
 
 echo "Elapsed time: $ELAPSED_TIME seconds"
+
+# Display file sizes and differences
+if [ -s "$TEMP_SIZE_LOG" ]; then
+    echo ""
+    echo "File sizes and differences:"
+    while IFS=':' read -r input_file input_mib wav_intermediate_file intermediate_mib output_file output_mib diff_percent; do
+        intermediate_display_name=$(echo "$wav_intermediate_file" | sed 's/_intermediate//')
+        echo "  Input: $input_file - $input_mib MiB"
+        echo "  Intermediate WAV: $intermediate_display_name - $intermediate_mib MiB"
+        echo "  Output: $output_file - $output_mib MiB"
+        echo "  Size difference (Output vs Input): $diff_percent%"
+        echo ""
+    done < "$TEMP_SIZE_LOG"
+    rm -f "$TEMP_SIZE_LOG"
+fi
 
 # Append completion message to logs
 for log_file in "${log_files[@]}"; do
