@@ -58,7 +58,7 @@ analyze_peaks() {
     volumedetect_output=$(ffmpeg -i "$file" -af "volumedetect" -f null - 2>&1 | grep -E "max_volume")
     max_volume=$(echo "$volumedetect_output" | sed 's/.*max_volume: \([-0-9.]* dB\).*/\1/')
 
-    # Run peak with full analysis (removed reset=1 to analyze entire file)
+    # Run peak with full analysis
     peak_output=$(ffmpeg -i "$file" -af "astats=metadata=1,ametadata=print:key=lavfi.astats.Overall.Peak_level" -f null - 2>&1 | grep "Peak_level" | tail -1)
     peak_level=$(echo "$peak_output" | sed 's/.*Peak_level=\([-0-9.]*\).*/\1 dBFS/')
 
@@ -85,7 +85,7 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
    - Pass 2: Applies normalization or volume adjustment to generate the output file.
 3. **Single-Pass Conversion** (if using volume): Applies volume adjustment directly.
 4. **Peak Analysis**: Displays input and output peak levels using volumedetect and peak filters in the 'File sizes and differences' section.
-5. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata.
+5. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata (for logging purposes only).
 6. **Output**: Files are saved in 'wv/', 'wvpk/', or 'flac/' subdirectories.
 7. **Logging**: Details saved in log.txt per directory.
 8. **Visualization (Optional)**: Generates waveform or spectrogram images if enabled.
@@ -373,7 +373,7 @@ process_file() {
         fi
     fi
 
-    # Extract metadata
+    # Extract metadata (for logging purposes only)
     ARTIST=$(ffprobe -v quiet -show_entries format_tags=artist -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null || echo "Unknown Artist")
     ALBUM=$(ffprobe -v quiet -show_entries format_tags=album -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null || echo "Unknown Album")
 
@@ -486,8 +486,8 @@ process_file() {
         echo "$input_file:$input_mib:$wav_intermediate_file:$intermediate_mib:$output_file:$output_mib:$diff_percent" >> "$TEMP_SIZE_LOG"
     fi
 
-    # Remove intermediate file
-    rm -f "$wav_intermediate_file"
+    # Remove intermediate file (only if not WAV)
+    [ "$OUTPUT_FORMAT" != "wav" ] && rm -f "$wav_intermediate_file"
 
     # Verify output integrity
     if [ ! -s "$output_file" ]; then
@@ -629,7 +629,6 @@ if [ -s "$TEMP_SIZE_LOG" ]; then
     echo ""
     echo "File sizes, differences, and peak information:"
     while IFS=':' read -r input_file input_mib wav_intermediate_file intermediate_mib output_file output_mib diff_percent; do
-        intermediate_display_name=$(echo "$wav_intermediate_file" | sed 's/_intermediate//')
         echo "  Input: $input_file - $input_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
         # Get input peak info
         input_peak_line=$(grep "^$input_file:Input:" "$TEMP_PEAK_LOG")
@@ -637,7 +636,8 @@ if [ -s "$TEMP_SIZE_LOG" ]; then
         input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
         echo "    Max Volume: ${input_max_volume:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
         echo "    Peak Level: ${input_peak_level:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
-        echo "  Intermediate WAV: $intermediate_display_name - $intermediate_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
+        # Skip Intermediate WAV line if output format is wav
+        [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
         echo "  Output: $output_file - $output_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
         # Get output peak info
         output_peak_line=$(grep "^$output_file:Output:" "$TEMP_PEAK_LOG")
@@ -645,6 +645,12 @@ if [ -s "$TEMP_SIZE_LOG" ]; then
         output_peak_level=$(echo "$output_peak_line" | cut -d':' -f4)
         echo "    Max Volume: ${output_max_volume:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
         echo "    Peak Level: ${output_peak_level:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
+        # Calculate and display headroom
+        if [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ]; then
+            output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
+            headroom=$(echo "scale=1; -0.5 - $output_max_value" | bc)
+            echo "    Headroom to -0.5 dB: $headroom dB" | tee -a "${log_files[$(dirname "$input_file")]}"
+        fi
         # Check for clipping warning
         if [ -n "$output_max_volume" ]; then
             output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
