@@ -22,6 +22,7 @@ ENABLE_VISUALIZATION="false"  # Enable visualization (waveform or spectrogram)
 VISUALIZATION_TYPE="spectrogram"  # Default visualization type
 VISUALIZATION_SIZE="1920x1080"    # Default visualization resolution
 SPECTROGRAM_MODE="combined"       # Default spectrogram mode (combined or separate)
+LOG_FILE=""                 # Log file for analysis results (empty by default)
 
 # Function to normalize paths (remove double slashes)
 normalize_path() {
@@ -76,6 +77,7 @@ analyze_volume_file() {
     local input_file="$1"
     local temp_peak_log="$TEMP_PEAK_LOG"
     local temp_headroom_log="$TEMP_HEADROOM_LOG"
+    local log_file="$LOG_FILE"
 
     # Analyze peaks for the input file
     analyze_peaks "$input_file" "Input" "$temp_peak_log"
@@ -85,23 +87,30 @@ analyze_volume_file() {
     input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
     input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
 
-    # Display results without color
+    # Display and log results
     echo "Input File: $input_file"
+    [ -n "$log_file" ] && echo "Input File: $input_file" >> "$log_file"
     echo "  Max Volume: ${input_max_volume:-Not detected}"
+    [ -n "$log_file" ] && echo "  Max Volume: ${input_max_volume:-Not detected}" >> "$log_file"
     echo "  Peak Level: ${input_peak_level:-Not detected}"
+    [ -n "$log_file" ] && echo "  Peak Level: ${input_peak_level:-Not detected}" >> "$log_file"
     if [ -n "$input_max_volume" ] && [ "$input_max_volume" != "Not detected" ]; then
         max_value=$(echo "$input_max_volume" | sed 's/ dB//')
         headroom=$(echo "scale=1; -0.5 - $max_value" | bc)
         echo "  Headroom to -0.5 dB: $headroom dB"
+        [ -n "$log_file" ] && echo "  Headroom to -0.5 dB: $headroom dB" >> "$log_file"
         if (( $(echo "$max_value > -0.5" | bc -l) )); then
             echo "  WARNING: Max Volume ($input_max_volume) is above -0.5 dB, risk of clipping!"
+            [ -n "$log_file" ] && echo "  WARNING: Max Volume ($input_max_volume) is above -0.5 dB, risk of clipping!" >> "$log_file"
         fi
-        # Store headroom value for statistics calculation
-        echo "$headroom" >> "$temp_headroom_log"
+        # Store headroom value with file name for statistics calculation
+        echo "$headroom:$input_file" >> "$temp_headroom_log"
     else
         echo "  Headroom to -0.5 dB: Not calculable (peak data unavailable)"
+        [ -n "$log_file" ] && echo "  Headroom to -0.5 dB: Not calculable (peak data unavailable)" >> "$log_file"
     fi
     echo ""
+    [ -n "$log_file" ] && echo "" >> "$log_file"
 }
 
 # Function to display README
@@ -117,11 +126,11 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
    - Pass 1: Analyzes loudness metrics (I, LRA, TP, threshold) using ffmpeg with -f null.
    - Pass 2: Applies normalization or volume adjustment to generate the output file.
 3. **Single-Pass Conversion** (if using volume): Applies volume adjustment directly.
-4. **Volume Analysis** (if using --volume analysis): Analyzes peak levels and calculates headroom to -0.5 dB for one or multiple .dsf files, with min/max/average statistics.
+4. **Volume Analysis** (if using --volume analysis): Analyzes peak levels and calculates headroom to -0.5 dB for one or multiple .dsf files, with min/max/average statistics and critical file identification.
 5. **Peak Analysis**: Displays input and output peak levels during conversion in the 'File sizes and differences' section.
 6. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata (for logging purposes only).
-7. **Output**: Converted files are saved in 'wv/', 'wvpk/', or 'flac/' subdirectories; analysis results are displayed in the terminal.
-8. **Logging**: Conversion details saved in log.txt per directory.
+7. **Output**: Converted files are saved in 'wv/', 'wvpk/', or 'flac/' subdirectories; analysis results are displayed in the terminal and optionally logged to a file.
+8. **Logging**: Conversion details saved in log.txt per directory; analysis can be saved with --log.
 9. **Visualization (Optional)**: Generates waveform or spectrogram images if enabled.
 
 ### Usage
@@ -199,6 +208,9 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
 
 - `--parallel <number>`: Set number of parallel jobs (e.g., 4).
   - Example: `./puretone.sh flac --parallel 4 /path/to/music` - Processes 4 files simultaneously.
+
+- `--log <file>`: Save volume analysis results to a file.
+  - Example: `./puretone.sh --volume analysis --log analysis.log /path/to/music` - Saves results to analysis.log.
 
 - `--help`: Display this help message.
   - Example: `./puretone.sh --help` - Shows this help text.
@@ -325,11 +337,19 @@ while [ ${#args[@]} -gt 0 ]; do
             ;;
         --skip-existing) SKIP_EXISTING="true" ;;
         --parallel) [[ "${args[1]}" =~ ^[0-9]+$ ]] && PARALLEL_JOBS="${args[1]}" || { echo "Error: --parallel requires a number"; exit 1; }; unset 'args[1]' ;;
+        --log) LOG_FILE=$(realpath "${args[1]}"); unset 'args[1]' ;;
         *) echo "Error: Unknown option or invalid format '$arg'. Directory or file must be the last argument."; exit 1 ;;
     esac
     unset 'args[0]'
     args=("${args[@]}")  # Reindex array
 done
+
+# Initialize log file if specified
+if [ -n "$LOG_FILE" ] && [ "$VOLUME" = "analysis" ]; then
+    > "$LOG_FILE" || { echo "Error: Cannot write to log file $LOG_FILE"; exit 1; }
+    echo "Volume Analysis Log - $(date)" >> "$LOG_FILE"
+    echo "----------------------------------------" >> "$LOG_FILE"
+fi
 
 # Check if AR is a multiple of 44100 Hz (only for conversion)
 if [ "$VOLUME" != "analysis" ] && [ $((AR % 44100)) -ne 0 ]; then
@@ -351,7 +371,7 @@ if [ "$VOLUME" != "analysis" ]; then
 fi
 
 # Export variables for parallel
-export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA VOLUME RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG TEMP_PEAK_LOG TEMP_HEADROOM_LOG WORKING_DIR ENABLE_VISUALIZATION VISUALIZATION_TYPE VISUALIZATION_SIZE SPECTROGRAM_MODE PARALLEL_JOBS
+export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA VOLUME RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG TEMP_PEAK_LOG TEMP_HEADROOM_LOG WORKING_DIR ENABLE_VISUALIZATION VISUALIZATION_TYPE VISUALIZATION_SIZE SPECTROGRAM_MODE PARALLEL_JOBS LOG_FILE
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -729,25 +749,40 @@ if [ "$VOLUME" = "analysis" ]; then
     ELAPSED_TIME=$((END_TIME - START_TIME))
     if [ $success -eq 1 ]; then
         echo "Volume analysis completed successfully!"
+        [ -n "$LOG_FILE" ] && echo "Volume analysis completed successfully!" >> "$LOG_FILE"
     else
         echo "Volume analysis completed with errors!"
+        [ -n "$LOG_FILE" ] && echo "Volume analysis completed with errors!" >> "$LOG_FILE"
     fi
     echo "Elapsed time: $ELAPSED_TIME seconds"
+    [ -n "$LOG_FILE" ] && echo "Elapsed time: $ELAPSED_TIME seconds" >> "$LOG_FILE"
 
     # Calculate and display headroom statistics
     if [ -s "$TEMP_HEADROOM_LOG" ]; then
         headroom_count=$(wc -l < "$TEMP_HEADROOM_LOG")
-        headroom_sum=$(awk '{sum += $1} END {print sum}' "$TEMP_HEADROOM_LOG")
-        headroom_min=$(awk 'NR==1{min=$1} {if ($1<min) min=$1} END {print min}' "$TEMP_HEADROOM_LOG")
-        headroom_max=$(awk 'NR==1{max=$1} {if ($1>max) max=$1} END {print max}' "$TEMP_HEADROOM_LOG")
+        headroom_sum=$(awk -F':' '{sum += $1} END {print sum}' "$TEMP_HEADROOM_LOG")
+        headroom_min=$(awk -F':' 'NR==1{min=$1} {if ($1<min) min=$1} END {print min}' "$TEMP_HEADROOM_LOG")
+        headroom_max=$(awk -F':' 'NR==1{max=$1} {if ($1>max) max=$1} END {print max}' "$TEMP_HEADROOM_LOG")
+        min_file=$(awk -F':' -v min="$headroom_min" '$1==min {print $2; exit}' "$TEMP_HEADROOM_LOG")
+        max_file=$(awk -F':' -v max="$headroom_max" '$1==max {print $2; exit}' "$TEMP_HEADROOM_LOG")
         average_headroom=$(echo "scale=1; $headroom_sum / $headroom_count" | bc)
         echo "Headroom Statistics (across $headroom_count files):"
+        [ -n "$LOG_FILE" ] && echo "Headroom Statistics (across $headroom_count files):" >> "$LOG_FILE"
         echo "  Minimum Headroom to -0.5 dB: $headroom_min dB"
+        [ -n "$LOG_FILE" ] && echo "  Minimum Headroom to -0.5 dB: $headroom_min dB" >> "$LOG_FILE"
         echo "  Maximum Headroom to -0.5 dB: $headroom_max dB"
+        [ -n "$LOG_FILE" ] && echo "  Maximum Headroom to -0.5 dB: $headroom_max dB" >> "$LOG_FILE"
         echo "  Average Headroom to -0.5 dB: $average_headroom dB"
+        [ -n "$LOG_FILE" ] && echo "  Average Headroom to -0.5 dB: $average_headroom dB" >> "$LOG_FILE"
+        echo "Note: Minimum headroom ($headroom_min dB) found in '$min_file'"
+        [ -n "$LOG_FILE" ] && echo "Note: Minimum headroom ($headroom_min dB) found in '$min_file'" >> "$LOG_FILE"
+        echo "Note: Maximum headroom ($headroom_max dB) found in '$max_file'"
+        [ -n "$LOG_FILE" ] && echo "Note: Maximum headroom ($headroom_max dB) found in '$max_file'" >> "$LOG_FILE"
     else
         echo "Headroom Statistics: Not calculable (no valid headroom data)"
+        [ -n "$LOG_FILE" ] && echo "Headroom Statistics: Not calculable (no valid headroom data)" >> "$LOG_FILE"
     fi
+    [ -n "$LOG_FILE" ] && echo "----------------------------------------" >> "$LOG_FILE"
 else
     # Conversion logic
     if [ -n "$INPUT_FILE" ]; then
