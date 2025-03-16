@@ -48,6 +48,29 @@ validate_volume() {
     fi
 }
 
+# Function to analyze peaks and store results
+analyze_peaks() {
+    local file="$1"
+    local type="$2"  # "Input" or "Output"
+    local temp_file="$3"  # Temporary file to store peak info
+
+    # Run volumedetect
+    volumedetect_output=$(ffmpeg -i "$file" -af "volumedetect" -f null - 2>&1 | grep -E "max_volume")
+    max_volume=$(echo "$volumedetect_output" | sed 's/.*max_volume: \([-0-9.]* dB\).*/\1/')
+
+    # Run peak with full analysis (removed reset=1 to analyze entire file)
+    peak_output=$(ffmpeg -i "$file" -af "astats=metadata=1,ametadata=print:key=lavfi.astats.Overall.Peak_level" -f null - 2>&1 | grep "Peak_level" | tail -1)
+    peak_level=$(echo "$peak_output" | sed 's/.*Peak_level=\([-0-9.]*\).*/\1 dBFS/')
+
+    # Handle cases where peak_level is -inf or not detected
+    if [ -z "$peak_level" ] || [ "$peak_level" = "-inf dBFS" ]; then
+        peak_level="Not detected (possible silence or error)"
+    fi
+
+    # Store results in temp file
+    echo "$file:$type:$max_volume:$peak_level" >> "$temp_file"
+}
+
 # Function to display README
 show_help() {
     cat << 'EOF'
@@ -57,13 +80,15 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
 
 ### How it Works
 1. **Input**: Accepts a single .dsf file or scans the specified/current directory for .dsf files or subdirectories.
-2. **Two-Pass Conversion**:
-   - Pass 1: Analyzes loudness metrics (I, LRA, TP, threshold) using ffmpeg with -f null (if using loudnorm).
+2. **Two-Pass Conversion** (if using loudnorm):
+   - Pass 1: Analyzes loudness metrics (I, LRA, TP, threshold) using ffmpeg with -f null.
    - Pass 2: Applies normalization or volume adjustment to generate the output file.
-3. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata.
-4. **Output**: Files are saved in 'wv/', 'wvpk/', or 'flac/' subdirectories.
-5. **Logging**: Details saved in log.txt per directory.
-6. **Visualization (Optional)**: Generates waveform or spectrogram images if enabled.
+3. **Single-Pass Conversion** (if using volume): Applies volume adjustment directly.
+4. **Peak Analysis**: Displays input and output peak levels using volumedetect and peak filters in the 'File sizes and differences' section.
+5. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata.
+6. **Output**: Files are saved in 'wv/', 'wvpk/', or 'flac/' subdirectories.
+7. **Logging**: Details saved in log.txt per directory.
+8. **Visualization (Optional)**: Generates waveform or spectrogram images if enabled.
 
 ### Usage
 - Save as `puretone.sh`, make executable: `chmod +x puretone.sh`.
@@ -132,8 +157,10 @@ SKIP_EXISTING="false"
 declare -i overwritten=0 skipped=0
 TEMP_LOG="/tmp/puretone_$$_results.log"
 TEMP_SIZE_LOG="/tmp/puretone_$$_sizes.log"  # Temporary file to store size info
+TEMP_PEAK_LOG="/tmp/puretone_$$_peaks.log"  # Temporary file to store peak info
 > "$TEMP_LOG"  # Initialize temporary log file
 > "$TEMP_SIZE_LOG"  # Initialize temporary size log file
+> "$TEMP_PEAK_LOG"  # Initialize temporary peak log file
 
 # Parse arguments (directory or file must be last)
 args=("$@")
@@ -242,7 +269,7 @@ case "$OUTPUT_FORMAT" in
 esac
 
 # Export variables for parallel
-export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA VOLUME RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG WORKING_DIR ENABLE_VISUALIZATION VISUALIZATION_TYPE VISUALIZATION_SIZE SPECTROGRAM_MODE
+export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA VOLUME RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG TEMP_PEAK_LOG WORKING_DIR ENABLE_VISUALIZATION VISUALIZATION_TYPE VISUALIZATION_SIZE SPECTROGRAM_MODE
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -381,6 +408,9 @@ process_file() {
         touch "$OUTPUT_DIR/.processed"
     fi
 
+    # Analyze input peaks
+    analyze_peaks "$input_file" "Input" "$TEMP_PEAK_LOG"
+
     if [ -n "$VOLUME" ]; then
         # Single pass with volume adjustment
         local af_pass="$AF_BASE,volume=$VOLUME"
@@ -466,6 +496,9 @@ process_file() {
         return 1
     fi
 
+    # Analyze output peaks
+    analyze_peaks "$output_file" "Output" "$TEMP_PEAK_LOG"
+
     # Generate visualization if enabled
     if [ "$ENABLE_VISUALIZATION" = "true" ]; then
         if [ "$VISUALIZATION_TYPE" = "waveform" ]; then
@@ -490,13 +523,13 @@ process_file() {
 cleanup() {
     echo "Script interrupted. Cleaning up temporary files..."
     find "$WORKING_DIR" -name "*_intermediate.wav" -delete
-    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG"
+    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG" "$TEMP_PEAK_LOG"
     exit 1
 }
 trap cleanup INT TERM
 
 # Export the function for parallel
-export -f process_file normalize_path validate_volume
+export -f process_file normalize_path validate_volume analyze_peaks
 
 # Change to the working directory
 cd "$WORKING_DIR" || { echo "Error: Cannot change to directory $WORKING_DIR"; exit 1; }
@@ -537,18 +570,18 @@ else
                     ;;
                 [Nn]*)
                     echo "Aborting conversion."
-                    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG"
+                    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG" "$TEMP_PEAK_LOG"
                     exit 0
                     ;;
                 *)
                     echo "Invalid response. Aborting conversion."
-                    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG"
+                    rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG" "$TEMP_PEAK_LOG"
                     exit 1
                     ;;
             esac
         else
             echo "No .dsf files found in $WORKING_DIR or its subdirectories."
-            rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG"
+            rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG" "$TEMP_PEAK_LOG"
             exit 1
         fi
     fi
@@ -591,19 +624,38 @@ fi
 
 echo "Elapsed time: $ELAPSED_TIME seconds"
 
-# Display file sizes and differences
+# Display file sizes, differences, and peak information
 if [ -s "$TEMP_SIZE_LOG" ]; then
     echo ""
-    echo "File sizes and differences:"
+    echo "File sizes, differences, and peak information:"
     while IFS=':' read -r input_file input_mib wav_intermediate_file intermediate_mib output_file output_mib diff_percent; do
         intermediate_display_name=$(echo "$wav_intermediate_file" | sed 's/_intermediate//')
-        echo "  Input: $input_file - $input_mib MiB"
-        echo "  Intermediate WAV: $intermediate_display_name - $intermediate_mib MiB"
-        echo "  Output: $output_file - $output_mib MiB"
-        echo "  Size difference (Output vs Input): $diff_percent%"
-        echo ""
+        echo "  Input: $input_file - $input_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
+        # Get input peak info
+        input_peak_line=$(grep "^$input_file:Input:" "$TEMP_PEAK_LOG")
+        input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
+        input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
+        echo "    Max Volume: ${input_max_volume:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
+        echo "    Peak Level: ${input_peak_level:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
+        echo "  Intermediate WAV: $intermediate_display_name - $intermediate_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
+        echo "  Output: $output_file - $output_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
+        # Get output peak info
+        output_peak_line=$(grep "^$output_file:Output:" "$TEMP_PEAK_LOG")
+        output_max_volume=$(echo "$output_peak_line" | cut -d':' -f3)
+        output_peak_level=$(echo "$output_peak_line" | cut -d':' -f4)
+        echo "    Max Volume: ${output_max_volume:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
+        echo "    Peak Level: ${output_peak_level:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
+        # Check for clipping warning
+        if [ -n "$output_max_volume" ]; then
+            output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
+            if (( $(echo "$output_max_value > -0.5" | bc -l) )); then
+                echo "    WARNING: Output Max Volume ($output_max_volume) is above -0.5 dB, risk of clipping!" | tee -a "${log_files[$(dirname "$input_file")]}"
+            fi
+        fi
+        echo "  Size difference (Output vs Input): $diff_percent%" | tee -a "${log_files[$(dirname "$input_file")]}"
+        echo "" | tee -a "${log_files[$(dirname "$input_file")]}"
     done < "$TEMP_SIZE_LOG"
-    rm -f "$TEMP_SIZE_LOG"
+    rm -f "$TEMP_SIZE_LOG" "$TEMP_PEAK_LOG"
 fi
 
 # Append completion message to logs
