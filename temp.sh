@@ -34,7 +34,7 @@ validate_resolution() {
     if [[ "$1" =~ ^[0-9]+x[0-9]+$ ]]; then
         return 0
     else
-        echo "Error: Visualization resolution must be in the format 'width x height' (e.g., 1920x1080)"
+        echo "Error: Visualization resolution mustOr be in the format 'width x height' (e.g., 1920x1080)"
         exit 1
     fi
 }
@@ -49,19 +49,19 @@ validate_volume() {
     fi
 }
 
-# Function to analyze peaks and store results
+# Function to analyze peaks and store results (corrected to fully suppress output)
 analyze_peaks() {
     local file="$1"
     local type="$2"  # "Input" or "Output"
     local temp_file="$3"  # Temporary file to store peak info
 
-    # Run volumedetect silently and capture output
-    volumedetect_output=$(ffmpeg -i "$file" -af "volumedetect" -f null - 2>&1 | grep -E "max_volume")
-    max_volume=$(echo "$volumedetect_output" | sed 's/.*max_volume: \([-0-9.]* dB\).*/\1/')
+    # Run volumedetect silently, redirecting all output
+    volumedetect_output=$(ffmpeg -i "$file" -af "volumedetect" -f null - 2>&1 | grep -E "max_volume" || true)
+    max_volume=$(echo "$volumedetect_output" | sed 's/.*max_volume: \([-0-9.]* dB\).*/\1/' || echo "Not detected")
 
-    # Run peak with full analysis silently and capture output
-    peak_output=$(ffmpeg -i "$file" -af "astats=metadata=1,ametadata=print:key=lavfi.astats.Overall.Peak_level" -f null - 2>&1 | grep "Peak_level" | tail -1)
-    peak_level=$(echo "$peak_output" | sed 's/.*Peak_level=\([-0-9.]*\).*/\1 dBFS/')
+    # Run peak analysis silently, redirecting all output
+    peak_output=$(ffmpeg -i "$file" -af "astats=metadata=1,ametadata=print:key=lavfi.astats.Overall.Peak_level" -f null - 2>&1 | grep "Peak_level" | tail -1 || true)
+    peak_level=$(echo "$peak_output" | sed 's/.*Peak_level=\([-0-9.]*\).*/\1 dBFS/' || echo "Not detected")
 
     # Handle cases where peak_level is -inf or not detected
     if [ -z "$peak_level" ] || [ "$peak_level" = "-inf dBFS" ]; then
@@ -713,7 +713,7 @@ case "$response" in
         ;;
 esac
 
-# Function to calculate auto volume adjustment for a specific set of files
+# Function to calculate auto volume adjustment for a specific set of files (corrected with --silent)
 calculate_auto_volume() {
     local files="$1"  # List of files to process
     local subdir="$2"  # Subdirectory name (for logging)
@@ -726,7 +726,7 @@ calculate_auto_volume() {
         analyze_volume_file "$INPUT_FILE" || success=0
     else
         echo "Analyzing files for auto volume in ${subdir:-current directory}"
-        echo "$files" | parallel -j "$PARALLEL_JOBS" --line-buffer analyze_volume_file || success=0
+        echo "$files" | parallel --silent -j "$PARALLEL_JOBS" --line-buffer analyze_volume_file || success=0
     fi
 
     if [ -s "$TEMP_HEADROOM_LOG" ]; then
@@ -734,7 +734,7 @@ calculate_auto_volume() {
         min_file=$(awk -F':' -v min="$headroom_min" '$1==min {print $2; exit}' "$TEMP_HEADROOM_LOG")
         VOLUME="${headroom_min}dB"
 
-        # Verificar viabilidade e ajustar se necessário
+        # Verify feasibility and adjust if necessary
         viable="true"
         while IFS=':' read -r headroom file; do
             max_volume=$(echo "scale=1; $HEADROOM_LIMIT - $headroom" | bc)
@@ -962,45 +962,45 @@ if [ "$VOLUME" != "analysis" ]; then
     echo "Elapsed time: $ELAPSED_TIME seconds"
 
     # Display file sizes, differences, and peak information
-if [ -s "$TEMP_SIZE_LOG" ]; then
-    echo ""
-    echo "File sizes, differences, and peak information:"
-    while IFS=':' read -r input_file input_mib wav_intermediate_file intermediate_mib output_file output_mib diff_percent; do
-        dir=$(dirname "$input_file")
-        log_file="${log_files[$dir]}"
-        {
-            echo "  Input: $input_file - $input_mib MiB"
-            input_peak_line=$(grep "^$input_file:Input:" "$TEMP_PEAK_LOG")
-            input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
-            input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
-            echo "    Max Volume: ${input_max_volume:-Not detected}"
-            echo "    Peak Level: ${input_peak_level:-Not detected}"
-            [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB"
-            echo "  Output: $output_file - $output_mib MiB"
-            output_peak_line=$(grep "^$output_file:Output:" "$TEMP_PEAK_LOG")
-            output_max_volume=$(echo "$output_peak_line" | cut -d':' -f3)
-            output_peak_level=$(echo "$output_peak_line" | cut -d':' -f4)
-            echo "    Max Volume: ${output_max_volume:-Not detected}"
-            echo "    Peak Level: ${output_peak_level:-Not detected}"
-            if [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ]; then
-                output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
-                headroom=$(echo "scale=1; $HEADROOM_LIMIT - $output_max_value" | bc)
-                echo "    Headroom to $HEADROOM_LIMIT dB: $headroom dB"
-            fi
-            if [ -n "$output_max_volume" ]; then
-                output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
-                if (( $(echo "$output_max_value > $HEADROOM_LIMIT" | bc -l) )); then
-                    echo "    WARNING: Output Max Volume ($output_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!"
+    if [ -s "$TEMP_SIZE_LOG" ]; then
+        echo ""
+        echo "File sizes, differences, and peak information:"
+        while IFS=':' read -r input_file input_mib wav_intermediate_file intermediate_mib output_file output_mib diff_percent; do
+            dir=$(dirname "$input_file")
+            log_file="${log_files[$dir]}"
+            {
+                echo "  Input: $input_file - $input_mib MiB"
+                input_peak_line=$(grep "^$input_file:Input:" "$TEMP_PEAK_LOG")
+                input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
+                input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
+                echo "    Max Volume: ${input_max_volume:-Not detected}"
+                echo "    Peak Level: ${input_peak_level:-Not detected}"
+                [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB"
+                echo "  Output: $output_file - $output_mib MiB"
+                output_peak_line=$(grep "^$output_file:Output:" "$TEMP_PEAK_LOG")
+                output_max_volume=$(echo "$output_peak_line" | cut -d':' -f3)
+                output_peak_level=$(echo "$output_peak_line" | cut -d':' -f4)
+                echo "    Max Volume: ${output_max_volume:-Not detected}"
+                echo "    Peak Level: ${output_peak_level:-Not detected}"
+                if [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ]; then
+                    output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
+                    headroom=$(echo "scale=1; $HEADROOM_LIMIT - $output_max_value" | bc)
+                    echo "    Headroom to $HEADROOM_LIMIT dB: $headroom dB"
                 fi
-            fi
-            echo "  Size difference (Output vs Input): $diff_percent%"
-            echo ""
-        } > /tmp/puretone_temp_output_$$  # Redirect to temporary file
-        cat /tmp/puretone_temp_output_$$  # Display on terminal
-        cat /tmp/puretone_temp_output_$$ >> "$log_file"  # Append to log file
-        rm -f /tmp/puretone_temp_output_$$  # Clean up temporary file
-    done < "$TEMP_SIZE_LOG"
-fi
+                if [ -n "$output_max_volume" ]; then
+                    output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
+                    if (( $(echo "$output_max_value > $HEADROOM_LIMIT" | bc -l) )); then
+                        echo "    WARNING: Output Max Volume ($output_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!"
+                    fi
+                fi
+                echo "  Size difference (Output vs Input): $diff_percent%"
+                echo ""
+            } > /tmp/puretone_temp_output_$$  # Redirect to temporary file
+            cat /tmp/puretone_temp_output_$$  # Display on terminal
+            cat /tmp/puretone_temp_output_$$ >> "$log_file"  # Append to log file
+            rm -f /tmp/puretone_temp_output_$$  # Clean up temporary file
+        done < "$TEMP_SIZE_LOG"
+    fi
 
     # Append completion message to logs
     for log_file in "${log_files[@]}"; do
