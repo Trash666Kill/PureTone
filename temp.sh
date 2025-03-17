@@ -23,6 +23,7 @@ VISUALIZATION_TYPE="spectrogram"  # Default visualization type
 VISUALIZATION_SIZE="1920x1080"    # Default visualization resolution
 SPECTROGRAM_MODE="combined"       # Default spectrogram mode (combined or separate)
 LOG_FILE=""                 # Log file for analysis results (empty by default)
+HEADROOM_LIMIT="-0.5"       # Headroom limit in dB for --volume auto (default: -0.5 dB)
 
 # Function to normalize paths (remove double slashes)
 normalize_path() {
@@ -87,30 +88,38 @@ analyze_volume_file() {
     input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
     input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
 
-    # Display and log results
-    echo "Input File: $input_file"
-    [ -n "$log_file" ] && echo "Input File: $input_file" >> "$log_file"
-    echo "  Max Volume: ${input_max_volume:-Not detected}"
-    [ -n "$log_file" ] && echo "  Max Volume: ${input_max_volume:-Not detected}" >> "$log_file"
-    echo "  Peak Level: ${input_peak_level:-Not detected}"
-    [ -n "$log_file" ] && echo "  Peak Level: ${input_peak_level:-Not detected}" >> "$log_file"
+    # Display and log results (only if not in auto mode)
+    if [ "$VOLUME" != "auto" ]; then
+        echo "Input File: $input_file"
+        [ -n "$log_file" ] && echo "Input File: $input_file" >> "$log_file"
+        echo "  Max Volume: ${input_max_volume:-Not detected}"
+        [ -n "$log_file" ] && echo "  Max Volume: ${input_max_volume:-Not detected}" >> "$log_file"
+        echo "  Peak Level: ${input_peak_level:-Not detected}"
+        [ -n "$log_file" ] && echo "  Peak Level: ${input_peak_level:-Not detected}" >> "$log_file"
+    fi
+
     if [ -n "$input_max_volume" ] && [ "$input_max_volume" != "Not detected" ]; then
         max_value=$(echo "$input_max_volume" | sed 's/ dB//')
-        headroom=$(echo "scale=1; -0.5 - $max_value" | bc)
-        echo "  Headroom to -0.5 dB: $headroom dB"
-        [ -n "$log_file" ] && echo "  Headroom to -0.5 dB: $headroom dB" >> "$log_file"
-        if (( $(echo "$max_value > -0.5" | bc -l) )); then
-            echo "  WARNING: Max Volume ($input_max_volume) is above -0.5 dB, risk of clipping!"
-            [ -n "$log_file" ] && echo "  WARNING: Max Volume ($input_max_volume) is above -0.5 dB, risk of clipping!" >> "$log_file"
+        headroom=$(echo "scale=1; $HEADROOM_LIMIT - $max_value" | bc)
+        if [ "$VOLUME" != "auto" ]; then
+            echo "  Headroom to $HEADROOM_LIMIT dB: $headroom dB"
+            [ -n "$log_file" ] && echo "  Headroom to $HEADROOM_LIMIT dB: $headroom dB" >> "$log_file"
+            if (( $(echo "$max_value > $HEADROOM_LIMIT" | bc -l) )); then
+                echo "  WARNING: Max Volume ($input_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!"
+                [ -n "$log_file" ] && echo "  WARNING: Max Volume ($input_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!" >> "$log_file"
+            fi
         fi
-        # Store headroom value with file name for statistics calculation
+        # Store headroom value with file name
         echo "$headroom:$input_file" >> "$temp_headroom_log"
-    else
-        echo "  Headroom to -0.5 dB: Not calculable (peak data unavailable)"
-        [ -n "$log_file" ] && echo "  Headroom to -0.5 dB: Not calculable (peak data unavailable)" >> "$log_file"
+    elif [ "$VOLUME" != "auto" ]; then
+        echo "  Headroom to $HEADROOM_LIMIT dB: Not calculable (peak data unavailable)"
+        [ -n "$log_file" ] && echo "  Headroom to $HEADROOM_LIMIT dB: Not calculable (peak data unavailable)" >> "$log_file"
     fi
-    echo ""
-    [ -n "$log_file" ] && echo "" >> "$log_file"
+
+    if [ "$VOLUME" != "auto" ]; then
+        echo ""
+        [ -n "$log_file" ] && echo "" >> "$log_file"
+    fi
 }
 
 # Function to display README
@@ -118,7 +127,7 @@ show_help() {
     cat << 'EOF'
 README: PureTone - DSD to High-Quality Audio Converter
 
-PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using a two-pass loudness normalization process with ffmpeg and GNU Parallel for parallel processing. It also supports volume analysis of .dsf files.
+PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using a two-pass loudness normalization process with ffmpeg and GNU Parallel for parallel processing. It also supports volume analysis and automatic volume adjustment.
 
 ### How it Works
 1. **Input**: Accepts a single .dsf file or scans the specified/current directory for .dsf files or subdirectories.
@@ -126,12 +135,13 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
    - Pass 1: Analyzes loudness metrics (I, LRA, TP, threshold) using ffmpeg with -f null.
    - Pass 2: Applies normalization or volume adjustment to generate the output file.
 3. **Single-Pass Conversion** (if using volume): Applies volume adjustment directly.
-4. **Volume Analysis** (if using --volume analysis): Analyzes peak levels and calculates headroom to -0.5 dB for one or multiple .dsf files, with min/max/average statistics and critical file identification.
-5. **Peak Analysis**: Displays input and output peak levels during conversion in the 'File sizes and differences' section.
-6. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata (for logging purposes only).
-7. **Output**: Converted files are saved in 'wv/', 'wvpk/', or 'flac/' subdirectories; analysis results are displayed in the terminal and optionally logged to a file.
-8. **Logging**: Conversion details saved in log.txt per directory; analysis can be saved with --log.
-9. **Visualization (Optional)**: Generates waveform or spectrogram images if enabled.
+4. **Volume Analysis** (if using --volume analysis): Analyzes peak levels and calculates headroom to a configurable limit (default -0.5 dB) for one or multiple .dsf files, with min/max/average statistics.
+5. **Automatic Volume Adjustment** (if using --volume auto): Applies a volume adjustment based on the smallest headroom, ensuring all files stay below the headroom limit (default -0.5 dB). If multiple subdirectories are present, processes each as a separate album with its own adjustment.
+6. **Peak Analysis**: Displays input and output peak levels during conversion in the 'File sizes and differences' section.
+7. **Metadata Extraction**: Uses ffprobe to extract artist and album metadata (for logging purposes only).
+8. **Output**: Converted files are saved in 'wv/', 'wvpk/', or 'flac/' subdirectories; analysis results are displayed in the terminal and optionally logged to a file.
+9. **Logging**: Conversion details saved in log.txt per directory; analysis can be saved with --log.
+10. **Visualization (Optional)**: Generates waveform or spectrogram images if enabled.
 
 ### Usage
 - Save as `puretone.sh`, make executable: `chmod +x puretone.sh`.
@@ -157,13 +167,14 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
 - **FLAC_COMPRESSION**: 0-12. Default: "0".
 - **OVERWRITE**: Overwrite files (true/false). Default: "true".
 - **PARALLEL_JOBS**: Number of parallel jobs. Default: 2.
+- **HEADROOM_LIMIT**: Headroom limit for '--volume auto'. Default: "-0.5".
 
 ### Command-Line Options and Examples
 - `<format>`: Output format: "wav", "wavpack", or "flac".
   - Example: `./puretone.sh wav /path/to/file.dsf` - Converts a single file to WAV.
   - Example: `./puretone.sh wavpack /path/to/music` - Converts all .dsf files in a directory to WavPack.
 
-- `--codec <value>`: Set audio codec (e.g., "pcm_s24le").
+- `--codec <value>`: Set audio codec (e.g., "pcm_s32le").
   - Example: `./puretone.sh flac --codec pcm_s32le /path/to/file.dsf` - Uses 32-bit PCM codec.
 
 - `--sample-rate <value>`: Set sample rate (e.g., "176400").
@@ -181,10 +192,13 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
 - `--loudnorm-LRA <value>`: Set loudness range (e.g., 20).
   - Example: `./puretone.sh wavpack --loudnorm-LRA 15 /path/to/music` - Sets loudness range to 15 LU.
 
-- `--volume <value>`: Set volume adjustment in dB (e.g., "3dB", overrides loudnorm) or "analysis" for peak analysis only.
+- `--volume <value>`: Set volume adjustment in dB (e.g., "3dB", overrides loudnorm), "analysis" for peak analysis only, or "auto" for automatic adjustment based on smallest headroom.
   - Example: `./puretone.sh flac --volume 2.5dB /path/to/file.dsf` - Increases volume by 2.5 dB.
   - Example: `./puretone.sh --volume analysis /path/to/file.dsf` - Analyzes peaks of a single file.
-  - Example: `./puretone.sh --volume analysis /path/to/music` - Analyzes peaks of all .dsf files in a directory.
+  - Example: `./puretone.sh wav --volume auto /path/to/music` - Adjusts volume automatically, treating subdirectories (albums) individually.
+
+- `--headroom-limit <value>`: Set the headroom limit in dB for '--volume auto' (default: -0.5dB).
+  - Example: `./puretone.sh wav --volume auto --headroom-limit -1dB /path/to/music` - Sets headroom limit to -1 dB.
 
 - `--resampler <value>`: Set resampler engine (e.g., "soxr").
   - Example: `./puretone.sh wav --resampler swr /path/to/file.dsf` - Uses FFmpeg's default resampler.
@@ -209,15 +223,16 @@ PureTone converts DSD (.dsf) audio files to WAV, WavPack, or FLAC formats using 
 - `--parallel <number>`: Set number of parallel jobs (e.g., 4).
   - Example: `./puretone.sh flac --parallel 4 /path/to/music` - Processes 4 files simultaneously.
 
-- `--log <file>`: Save volume analysis results to a file.
-  - Example: `./puretone.sh --volume analysis --log analysis.log /path/to/music` - Saves results to analysis.log.
+- `--log <file>`: Save volume analysis or auto volume results to a file (includes file sizes and peak info with --volume auto).
+  - Example: `./puretone.sh --volume analysis --log analysis.log /path/to/music` - Saves analysis to analysis.log.
+  - Example: `./puretone.sh wavpack --volume auto --log analysis.log /path/to/music` - Saves per-album auto volume results and file details.
 
 - `--help`: Display this help message.
   - Example: `./puretone.sh --help` - Shows this help text.
 
 - `path/to/directory | path/to/file.dsf`: Path to process (last argument; required).
   - Example: `./puretone.sh wav /path/to/file.dsf` - Converts a single file.
-  - Example: `./puretone.sh wavpack /path/to/music` - Converts all files in a directory.
+  - Example: `./puretone.sh wavpack /path/to/music` - Converts all files in a directory or its subdirectories (albums treated individually with --volume auto).
 EOF
     exit 0
 }
@@ -278,11 +293,19 @@ while [ ${#args[@]} -gt 0 ]; do
             if [ "${args[1]}" = "analysis" ]; then
                 VOLUME="analysis"
                 unset 'args[1]'
+            elif [ "${args[1]}" = "auto" ]; then
+                VOLUME="auto"
+                unset 'args[1]'
             else
                 validate_volume "${args[1]}"
                 VOLUME="${args[1]}"
                 unset 'args[1]'
             fi
+            ;;
+        --headroom-limit)
+            validate_volume "${args[1]}"
+            HEADROOM_LIMIT=$(echo "${args[1]}" | sed 's/dB//')
+            unset 'args[1]'
             ;;
         --resampler) RESAMPLER="${args[1]}"; unset 'args[1]' ;;
         --precision) [[ "${args[1]}" =~ ^[0-9]+$ ]] && PRECISION="${args[1]}" || { echo "Error: --precision requires a number"; exit 1; }; unset 'args[1]' ;;
@@ -345,7 +368,7 @@ while [ ${#args[@]} -gt 0 ]; do
 done
 
 # Initialize log file if specified
-if [ -n "$LOG_FILE" ] && [ "$VOLUME" = "analysis" ]; then
+if [ -n "$LOG_FILE" ] && { [ "$VOLUME" = "analysis" ] || [ "$VOLUME" = "auto" ]; }; then
     > "$LOG_FILE" || { echo "Error: Cannot write to log file $LOG_FILE"; exit 1; }
     echo "Volume Analysis Log - $(date)" >> "$LOG_FILE"
     echo "----------------------------------------" >> "$LOG_FILE"
@@ -371,7 +394,7 @@ if [ "$VOLUME" != "analysis" ]; then
 fi
 
 # Export variables for parallel
-export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA VOLUME RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG TEMP_PEAK_LOG TEMP_HEADROOM_LOG WORKING_DIR ENABLE_VISUALIZATION VISUALIZATION_TYPE VISUALIZATION_SIZE SPECTROGRAM_MODE PARALLEL_JOBS LOG_FILE
+export ACODEC AR MAP_METADATA LOUDNORM_I LOUDNORM_TP LOUDNORM_LRA VOLUME RESAMPLER PRECISION CHEBY AF_BASE OUTPUT_FORMAT WAVPACK_COMPRESSION FLAC_COMPRESSION OVERWRITE SKIP_EXISTING OUTPUT_BASE_DIR TEMP_LOG TEMP_SIZE_LOG TEMP_PEAK_LOG TEMP_HEADROOM_LOG WORKING_DIR ENABLE_VISUALIZATION VISUALIZATION_TYPE VISUALIZATION_SIZE SPECTROGRAM_MODE PARALLEL_JOBS LOG_FILE HEADROOM_LIMIT
 
 # Check dependencies
 command -v ffmpeg >/dev/null || { echo "Error: ffmpeg not found. Install with 'apt install ffmpeg'."; exit 1; }
@@ -393,12 +416,17 @@ if [ "$VOLUME" != "analysis" ]; then
     echo "  Sample rate (--sample-rate): $AR"
     echo "  Metadata mapping (--map-metadata): $MAP_METADATA"
     if [ -n "$VOLUME" ]; then
-        echo "  Volume adjustment (--volume): $VOLUME"
+        if [ "$VOLUME" = "auto" ]; then
+            echo "  Volume adjustment (--volume): Auto (to be calculated per subdirectory, ensuring no file exceeds $HEADROOM_LIMIT dB)"
+        else
+            echo "  Volume adjustment (--volume): $VOLUME"
+        fi
     else
         echo "  Loudnorm I (--loudnorm-I): $LOUDNORM_I"
         echo "  Loudnorm TP (--loudnorm-TP): $LOUDNORM_TP"
         echo "  Loudnorm LRA (--loudnorm-LRA): $LOUDNORM_LRA"
     fi
+    echo "  Headroom limit (--headroom-limit): $HEADROOM_LIMIT dB"
     echo "  Resampler: $RESAMPLER (precision: $PRECISION, Chebyshev: $CHEBY)"
     echo "  Base output directory: $OUTPUT_BASE_DIR"
     echo "  Visualization enabled: $ENABLE_VISUALIZATION"
@@ -420,17 +448,18 @@ if [ "$VOLUME" != "analysis" ]; then
         echo "  Single Pass (Volume Adjustment and Conversion):"
         case "$OUTPUT_FORMAT" in
             "wav")
-                echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=$VOLUME' <output_dir>/\${base_name}.wav -y"
+                echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=<volume>' <output_dir>/\${base_name}.wav -y"
                 ;;
             "wavpack")
-                echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=$VOLUME' <output_dir>/\${base_name}_intermediate.wav -y"
+                echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=<volume>' <output_dir>/\${base_name}_intermediate.wav -y"
                 echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec wavpack -compression_level $WAVPACK_COMPRESSION <output_dir>/\${base_name}.wv -y"
                 ;;
             "flac")
-                echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=$VOLUME' <output_dir>/\${base_name}_intermediate.wav -y"
+                echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,volume=<volume>' <output_dir>/\${base_name}_intermediate.wav -y"
                 echo "    ffmpeg -i <output_dir>/\${base_name}_intermediate.wav -acodec flac -compression_level $FLAC_COMPRESSION <output_dir>/\${base_name}.flac -y"
                 ;;
         esac
+        echo "  Note: '<volume>' will be the specified dB value or calculated automatically per subdirectory if '--volume auto' is used."
     else
         echo "  First Pass (Loudness Analysis):"
         echo "    ffmpeg -i <input_file> -acodec $ACODEC -ar $AR -map_metadata $MAP_METADATA -af '$AF_BASE,loudnorm=I=$LOUDNORM_I:TP=$LOUDNORM_TP:LRA=$LOUDNORM_LRA:print_format=summary' -f null -"
@@ -643,6 +672,8 @@ cd "$WORKING_DIR" || { echo "Error: Cannot change to directory $WORKING_DIR"; ex
 # Main logic with confirmation
 if [ "$VOLUME" = "analysis" ]; then
     echo "Starting volume analysis..."
+elif [ "$VOLUME" = "auto" ]; then
+    echo "Starting automatic volume adjustment and conversion..."
 else
     echo "Starting conversion..."
 fi
@@ -655,6 +686,8 @@ success=1
 # Confirmation before processing
 if [ "$VOLUME" = "analysis" ]; then
     echo "The script will now proceed with the volume analysis of .dsf files in $WORKING_DIR."
+elif [ "$VOLUME" = "auto" ]; then
+    echo "The script will now proceed with automatic volume adjustment and conversion of .dsf files in $WORKING_DIR."
 else
     echo "The script will now proceed with the conversion of .dsf files in $WORKING_DIR."
 fi
@@ -678,6 +711,8 @@ case "$response" in
     [Yy]*|"")  # 'y' or empty (Enter) means proceed
         if [ "$VOLUME" = "analysis" ]; then
             echo "Proceeding with volume analysis..."
+        elif [ "$VOLUME" = "auto" ]; then
+            echo "Proceeding with automatic volume adjustment and conversion..."
         else
             echo "Proceeding with conversion..."
         fi
@@ -685,6 +720,8 @@ case "$response" in
     [Nn]*)
         if [ "$VOLUME" = "analysis" ]; then
             echo "Aborting volume analysis."
+        elif [ "$VOLUME" = "auto" ]; then
+            echo "Aborting automatic volume adjustment and conversion."
         else
             echo "Aborting conversion."
         fi
@@ -698,6 +735,58 @@ case "$response" in
         ;;
 esac
 
+# Function to calculate auto volume adjustment for a specific set of files
+calculate_auto_volume() {
+    local files="$1"  # List of files to process
+    local subdir="$2"  # Subdirectory name (for logging)
+
+    # Clear previous headroom log for this calculation
+    > "$TEMP_HEADROOM_LOG"
+
+    if [ -n "$INPUT_FILE" ]; then
+        echo "Analyzing single file for auto volume: $INPUT_FILE"
+        analyze_volume_file "$INPUT_FILE" || success=0
+    else
+        echo "Analyzing files for auto volume in ${subdir:-current directory}"
+        echo "$files" | parallel -j "$PARALLEL_JOBS" --line-buffer analyze_volume_file || success=0
+    fi
+
+    if [ -s "$TEMP_HEADROOM_LOG" ]; then
+        headroom_min=$(awk -F':' 'NR==1{min=$1} {if ($1<min) min=$1} END {print min}' "$TEMP_HEADROOM_LOG")
+        min_file=$(awk -F':' -v min="$headroom_min" '$1==min {print $2; exit}' "$TEMP_HEADROOM_LOG")
+        VOLUME="${headroom_min}dB"
+
+        # Verificar viabilidade e ajustar se necessário
+        viable="true"
+        while IFS=':' read -r headroom file; do
+            max_volume=$(echo "scale=1; $HEADROOM_LIMIT - $headroom" | bc)
+            new_max_volume=$(echo "scale=1; $max_volume + $headroom_min" | bc)
+            if (( $(echo "$new_max_volume > $HEADROOM_LIMIT" | bc -l) )); then
+                viable="false"
+                problematic_file="$file"
+                safe_adjustment=$(echo "scale=1; $HEADROOM_LIMIT - $max_volume" | bc)
+                VOLUME="${safe_adjustment}dB"
+                break
+            fi
+        done < "$TEMP_HEADROOM_LOG"
+
+        if [ "$viable" = "true" ]; then
+            echo "Calculated volume adjustment based on smallest headroom ($headroom_min dB) from '$min_file': +$VOLUME"
+            [ -n "$LOG_FILE" ] && echo "Calculated volume adjustment based on smallest headroom ($headroom_min dB) from '$min_file': +$VOLUME" >> "$LOG_FILE"
+        else
+            echo "Adjusted volume to +$VOLUME to keep all files below $HEADROOM_LIMIT dB (initial adjustment of +${headroom_min}dB was not viable for '$problematic_file')"
+            [ -n "$LOG_FILE" ] && echo "Adjusted volume to +$VOLUME to keep all files below $HEADROOM_LIMIT dB (initial adjustment of +${headroom_min}dB was not viable for '$problematic_file')" >> "$LOG_FILE"
+        fi
+    else
+        echo "Error: No valid headroom data found for auto volume calculation in ${subdir:-current directory}."
+        [ -n "$LOG_FILE" ] && echo "Error: No valid headroom data found for auto volume calculation in ${subdir:-current directory}." >> "$LOG_FILE"
+        success=0
+    fi
+
+    # Export the calculated VOLUME for this subdirectory
+    export VOLUME
+}
+
 # Process based on VOLUME setting
 if [ "$VOLUME" = "analysis" ]; then
     # Volume analysis logic
@@ -705,7 +794,6 @@ if [ "$VOLUME" = "analysis" ]; then
         echo "Analyzing single file: $INPUT_FILE"
         analyze_volume_file "$INPUT_FILE" || success=0
     else
-        # Check for .dsf files in current directory or subdirectories
         dsf_files_found=$(find . -maxdepth 1 -name "*.dsf" | wc -l)
         if [ "$dsf_files_found" -gt 0 ]; then
             echo "Analyzing directory: $WORKING_DIR"
@@ -768,12 +856,12 @@ if [ "$VOLUME" = "analysis" ]; then
         average_headroom=$(echo "scale=1; $headroom_sum / $headroom_count" | bc)
         echo "Headroom Statistics (across $headroom_count files):"
         [ -n "$LOG_FILE" ] && echo "Headroom Statistics (across $headroom_count files):" >> "$LOG_FILE"
-        echo "  Minimum Headroom to -0.5 dB: $headroom_min dB"
-        [ -n "$LOG_FILE" ] && echo "  Minimum Headroom to -0.5 dB: $headroom_min dB" >> "$LOG_FILE"
-        echo "  Maximum Headroom to -0.5 dB: $headroom_max dB"
-        [ -n "$LOG_FILE" ] && echo "  Maximum Headroom to -0.5 dB: $headroom_max dB" >> "$LOG_FILE"
-        echo "  Average Headroom to -0.5 dB: $average_headroom dB"
-        [ -n "$LOG_FILE" ] && echo "  Average Headroom to -0.5 dB: $average_headroom dB" >> "$LOG_FILE"
+        echo "  Minimum Headroom to $HEADROOM_LIMIT dB: $headroom_min dB"
+        [ -n "$LOG_FILE" ] && echo "  Minimum Headroom to $HEADROOM_LIMIT dB: $headroom_min dB" >> "$LOG_FILE"
+        echo "  Maximum Headroom to $HEADROOM_LIMIT dB: $headroom_max dB"
+        [ -n "$LOG_FILE" ] && echo "  Maximum Headroom to $HEADROOM_LIMIT dB: $headroom_max dB" >> "$LOG_FILE"
+        echo "  Average Headroom to $HEADROOM_LIMIT dB: $average_headroom dB"
+        [ -n "$LOG_FILE" ] && echo "  Average Headroom to $HEADROOM_LIMIT dB: $average_headroom dB" >> "$LOG_FILE"
         echo "Note: Minimum headroom ($headroom_min dB) found in '$min_file'"
         [ -n "$LOG_FILE" ] && echo "Note: Minimum headroom ($headroom_min dB) found in '$min_file'" >> "$LOG_FILE"
         echo "Note: Maximum headroom ($headroom_max dB) found in '$max_file'"
@@ -783,13 +871,55 @@ if [ "$VOLUME" = "analysis" ]; then
         [ -n "$LOG_FILE" ] && echo "Headroom Statistics: Not calculable (no valid headroom data)" >> "$LOG_FILE"
     fi
     [ -n "$LOG_FILE" ] && echo "----------------------------------------" >> "$LOG_FILE"
+elif [ "$VOLUME" = "auto" ]; then
+    # Automatic volume adjustment and conversion logic
+    if [ -n "$INPUT_FILE" ]; then
+        echo "Processing single file: $INPUT_FILE"
+        calculate_auto_volume "$INPUT_FILE" ""
+        if [ $success -eq 1 ]; then
+            echo "Proceeding with conversion using calculated volume adjustment: $VOLUME"
+            process_file "$INPUT_FILE" || success=0
+        fi
+    else
+        dsf_files_found=$(find . -maxdepth 1 -name "*.dsf" | wc -l)
+        if [ "$dsf_files_found" -gt 0 ]; then
+            echo "Processing directory: $WORKING_DIR"
+            files=$(find . -maxdepth 1 -name "*.dsf")
+            calculate_auto_volume "$files" ""
+            if [ $success -eq 1 ]; then
+                echo "Proceeding with conversion using calculated volume adjustment: $VOLUME"
+                echo "$files" | parallel -j "$PARALLEL_JOBS" --line-buffer process_file || success=0
+            fi
+        else
+            subdirs_with_dsf=$(find . -maxdepth 1 -type d -not -path . -exec sh -c 'find "{}" -maxdepth 1 -name "*.dsf" | grep -q . && echo "{}"' \; | sed 's|./||')
+            if [ -n "$subdirs_with_dsf" ]; then
+                echo "Processing subdirectories individually with .dsf files in $WORKING_DIR:"
+                echo "$subdirs_with_dsf"
+                echo "----------------------------------------"
+                echo "$subdirs_with_dsf" | while IFS= read -r subdir; do
+                    echo "Processing subdirectory: $subdir"
+                    [ -n "$LOG_FILE" ] && echo "Processing subdirectory: $subdir" >> "$LOG_FILE"
+                    files=$(find "$subdir" -maxdepth 1 -name "*.dsf")
+                    calculate_auto_volume "$files" "$subdir"
+                    if [ $success -eq 1 ]; then
+                        echo "Proceeding with conversion using calculated volume adjustment: $VOLUME"
+                        echo "$files" | parallel -j "$PARALLEL_JOBS" --line-buffer process_file || success=0
+                    fi
+                    [ -n "$LOG_FILE" ] && echo "----------------------------------------" >> "$LOG_FILE"
+                done
+            else
+                echo "No .dsf files found in $WORKING_DIR or its subdirectories."
+                rm -f "$TEMP_LOG" "$TEMP_SIZE_LOG" "$TEMP_PEAK_LOG" "$TEMP_HEADROOM_LOG"
+                exit 1
+            fi
+        fi
+    fi
 else
     # Conversion logic
     if [ -n "$INPUT_FILE" ]; then
         echo "Processing single file: $INPUT_FILE"
         process_file "$INPUT_FILE" || success=0
     else
-        # Check for .dsf files in current directory or subdirectories
         dsf_files_found=$(find . -maxdepth 1 -name "*.dsf" | wc -l)
         if [ "$dsf_files_found" -gt 0 ]; then
             echo "Processing directory: $WORKING_DIR"
@@ -828,7 +958,10 @@ else
             fi
         fi
     fi
+fi
 
+# Post-processing for conversion modes
+if [ "$VOLUME" != "analysis" ]; then
     # Collect results from the temporary log
     while IFS=':' read -r dir status; do
         case "$status" in
@@ -848,60 +981,82 @@ else
     # Display results
     if [ $success -eq 1 ]; then
         echo "Conversion completed successfully!"
+        [ -n "$LOG_FILE" ] && echo "Conversion completed successfully!" >> "$LOG_FILE"
     else
         echo "Conversion completed with errors!"
+        [ -n "$LOG_FILE" ] && echo "Conversion completed with errors!" >> "$LOG_FILE"
     fi
     total_files=0
     if [ ${#log_files[@]} -gt 0 ]; then
         echo "Details saved in the following log files:"
+        [ -n "$LOG_FILE" ] && echo "Details saved in the following log files:" >> "$LOG_FILE"
         for dir in "${!log_files[@]}"; do
             echo "  ${log_files[$dir]} (${file_counts[$dir]:-0} files converted)"
+            [ -n "$LOG_FILE" ] && echo "  ${log_files[$dir]} (${file_counts[$dir]:-0} files converted)" >> "$LOG_FILE"
             ((total_files += ${file_counts[$dir]:-0}))
         done
         echo "Total files converted: $total_files"
-        [ $overwritten -gt 0 ] && echo "Files overwritten: $overwritten"
-        [ $skipped -gt 0 ] && echo "Files skipped: $skipped"
+        [ -n "$LOG_FILE" ] && echo "Total files converted: $total_files" >> "$LOG_FILE"
+        [ $overwritten -gt 0 ] && { echo "Files overwritten: $overwritten"; [ -n "$LOG_FILE" ] && echo "Files overwritten: $overwritten" >> "$LOG_FILE"; }
+        [ $skipped -gt 0 ] && { echo "Files skipped: $skipped"; [ -n "$LOG_FILE" ] && echo "Files skipped: $skipped" >> "$LOG_FILE"; }
     fi
-    [ "$ENABLE_VISUALIZATION" = "true" ] && echo "Visualizations saved in each output directory under spectrogram/."
+    [ "$ENABLE_VISUALIZATION" = "true" ] && { echo "Visualizations saved in each output directory under spectrogram/."; [ -n "$LOG_FILE" ] && echo "Visualizations saved in each output directory under spectrogram/." >> "$LOG_FILE"; }
 
     echo "Elapsed time: $ELAPSED_TIME seconds"
+    [ -n "$LOG_FILE" ] && echo "Elapsed time: $ELAPSED_TIME seconds" >> "$LOG_FILE"
 
     # Display file sizes, differences, and peak information
     if [ -s "$TEMP_SIZE_LOG" ]; then
         echo ""
         echo "File sizes, differences, and peak information:"
+        [ -n "$LOG_FILE" ] && {
+            echo "" >> "$LOG_FILE"
+            echo "File sizes, differences, and peak information:" >> "$LOG_FILE"
+        }
         while IFS=':' read -r input_file input_mib wav_intermediate_file intermediate_mib output_file output_mib diff_percent; do
-            echo "  Input: $input_file - $input_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
-            # Get input peak info
-            input_peak_line=$(grep "^$input_file:Input:" "$TEMP_PEAK_LOG")
-            input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
-            input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
-            echo "    Max Volume: ${input_max_volume:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
-            echo "    Peak Level: ${input_peak_level:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
-            # Skip Intermediate WAV line if output format is wav
-            [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
-            echo "  Output: $output_file - $output_mib MiB" | tee -a "${log_files[$(dirname "$input_file")]}"
-            # Get output peak info
-            output_peak_line=$(grep "^$output_file:Output:" "$TEMP_PEAK_LOG")
-            output_max_volume=$(echo "$output_peak_line" | cut -d':' -f3)
-            output_peak_level=$(echo "$output_peak_line" | cut -d':' -f4)
-            echo "    Max Volume: ${output_max_volume:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
-            echo "    Peak Level: ${output_peak_level:-Not detected}" | tee -a "${log_files[$(dirname "$input_file")]}"
-            # Calculate and display headroom
-            if [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ]; then
-                output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
-                headroom=$(echo "scale=1; -0.5 - $output_max_value" | bc)
-                echo "    Headroom to -0.5 dB: $headroom dB" | tee -a "${log_files[$(dirname "$input_file")]}"
-            fi
-            # Check for clipping warning
-            if [ -n "$output_max_volume" ]; then
-                output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
-                if (( $(echo "$output_max_value > -0.5" | bc -l) )); then
-                    echo "    WARNING: Output Max Volume ($output_max_volume) is above -0.5 dB, risk of clipping!" | tee -a "${log_files[$(dirname "$input_file")]}"
+            dir=$(dirname "$input_file")
+            log_file="${log_files[$dir]}"
+            {
+                echo "  Input: $input_file - $input_mib MiB"
+                input_peak_line=$(grep "^$input_file:Input:" "$TEMP_PEAK_LOG")
+                input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
+                input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
+                echo "    Max Volume: ${input_max_volume:-Not detected}"
+                echo "    Peak Level: ${input_peak_level:-Not detected}"
+                [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB"
+                echo "  Output: $output_file - $output_mib MiB"
+                output_peak_line=$(grep "^$output_file:Output:" "$TEMP_PEAK_LOG")
+                output_max_volume=$(echo "$output_peak_line" | cut -d':' -f3)
+                output_peak_level=$(echo "$output_peak_line" | cut -d':' -f4)
+                echo "    Max Volume: ${output_max_volume:-Not detected}"
+                echo "    Peak Level: ${output_peak_level:-Not detected}"
+                if [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ]; then
+                    output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
+                    headroom=$(echo "scale=1; $HEADROOM_LIMIT - $output_max_value" | bc)
+                    echo "    Headroom to $HEADROOM_LIMIT dB: $headroom dB"
                 fi
-            fi
-            echo "  Size difference (Output vs Input): $diff_percent%" | tee -a "${log_files[$(dirname "$input_file")]}"
-            echo "" | tee -a "${log_files[$(dirname "$input_file")]}"
+                if [ -n "$output_max_volume" ]; then
+                    output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
+                    if (( $(echo "$output_max_value > $HEADROOM_LIMIT" | bc -l) )); then
+                        echo "    WARNING: Output Max Volume ($output_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!"
+                    fi
+                fi
+                echo "  Size difference (Output vs Input): $diff_percent%"
+                echo ""
+            } | tee -a "$log_file"
+            [ -n "$LOG_FILE" ] && {
+                echo "  Input: $input_file - $input_mib MiB" >> "$LOG_FILE"
+                echo "    Max Volume: ${input_max_volume:-Not detected}" >> "$LOG_FILE"
+                echo "    Peak Level: ${input_peak_level:-Not detected}" >> "$LOG_FILE"
+                [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB" >> "$LOG_FILE"
+                echo "  Output: $output_file - $output_mib MiB" >> "$LOG_FILE"
+                echo "    Max Volume: ${output_max_volume:-Not detected}" >> "$LOG_FILE"
+                echo "    Peak Level: ${output_peak_level:-Not detected}" >> "$LOG_FILE"
+                [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ] && echo "    Headroom to $HEADROOM_LIMIT dB: $headroom dB" >> "$LOG_FILE"
+                [ -n "$output_max_volume" ] && (( $(echo "$output_max_value > $HEADROOM_LIMIT" | bc -l) )) && echo "    WARNING: Output Max Volume ($output_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!" >> "$LOG_FILE"
+                echo "  Size difference (Output vs Input): $diff_percent%" >> "$LOG_FILE"
+                echo "" >> "$LOG_FILE"
+            }
         done < "$TEMP_SIZE_LOG"
     fi
 
@@ -912,6 +1067,13 @@ else
         [ $success -eq 1 ] && echo "Conversion completed on $(date)" >> "$log_file" || echo "Conversion completed with errors on $(date)" >> "$log_file"
         echo "Elapsed time: $ELAPSED_TIME seconds" >> "$log_file"
     done
+    # Append completion message to LOG_FILE if specified
+    if [ -n "$LOG_FILE" ]; then
+        echo "" >> "$LOG_FILE"
+        echo "----------------------------------------" >> "$LOG_FILE"
+        [ $success -eq 1 ] && echo "Conversion completed on $(date)" >> "$LOG_FILE" || echo "Conversion completed with errors on $(date)" >> "$LOG_FILE"
+        echo "Elapsed time: $ELAPSED_TIME seconds" >> "$LOG_FILE"
+    fi
 
     # Clean up processed markers
     find "$WORKING_DIR" -name ".processed" -delete
