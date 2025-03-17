@@ -185,8 +185,8 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
         cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'],
                '-map_metadata', CONFIG['MAP_METADATA'], '-af', af, intermediate_wav, '-y']
         _, stderr, rc = run_command(cmd)
-        if rc != 0:
-            logger.error(f"Error applying volume adjustment to {input_file}. Check {local_log}")
+        if rc != 0 or not os.path.exists(intermediate_wav):
+            logger.error(f"Error creating intermediate WAV for {input_file}. Check {local_log}")
             with open(local_log, 'a') as f:
                 f.write(stderr + '\n')
             return False
@@ -218,8 +218,8 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
         cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'],
                '-map_metadata', CONFIG['MAP_METADATA'], '-af', af_second, intermediate_wav, '-y']
         _, stderr, rc = run_command(cmd)
-        if rc != 0:
-            logger.error(f"Error converting {input_file} to intermediate WAV. Check {local_log}")
+        if rc != 0 or not os.path.exists(intermediate_wav):
+            logger.error(f"Error creating intermediate WAV for {input_file}. Check {local_log}")
             with open(local_log, 'a') as f:
                 f.write(stderr + '\n')
             return False
@@ -233,14 +233,16 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
         elif CONFIG['OUTPUT_FORMAT'] == 'flac':
             final_cmd.extend(['-compression_level', CONFIG['FLAC_COMPRESSION']])
         final_cmd.extend([output_file, '-y'])
-        _, stderr, rc = run_command(cmd)
-        if rc != 0:
-            logger.error(f"Error converting {input_file} to {CONFIG['OUTPUT_FORMAT']}. Check {local_log}")
-            with open(local_log, 'a') as f:
-                f.write(stderr + '\n')
-            os.remove(intermediate_wav)
-            return False
-        os.remove(intermediate_wav)
+        try:
+            _, stderr, rc = run_command(final_cmd)
+            if rc != 0:
+                logger.error(f"Error converting {input_file} to {CONFIG['OUTPUT_FORMAT']}. Check {local_log}")
+                with open(local_log, 'a') as f:
+                    f.write(stderr + '\n')
+                return False
+        finally:
+            if os.path.exists(intermediate_wav):
+                os.remove(intermediate_wav)
 
     if not os.path.getsize(output_file):
         logger.error(f"Output file {output_file} is empty")
@@ -252,7 +254,8 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
             if line.startswith(f"{output_file}:Output:"):
                 _, _, output_max_volume, output_peak_level = line.strip().split(':', 3)
                 break
-    logger.info(f"Converted {input_file} -> {output_file}")
+    file_size_kb = os.path.getsize(output_file) / 1024
+    logger.info(f"Converted {input_file} -> {output_file} (Size: {file_size_kb:.1f} KB)")
     logger.debug(f"Output - Max Volume: {output_max_volume}, Peak Level: {output_peak_level}")
 
     if CONFIG['ENABLE_VISUALIZATION']:
@@ -262,12 +265,12 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
         else:
             cmd = ['ffmpeg', '-i', output_file, '-lavfi', f"showspectrumpic=s={CONFIG['VISUALIZATION_SIZE']}:mode={CONFIG['SPECTROGRAM_MODE']}", vis_file, '-y']
         _, stderr, rc = run_command(cmd)
-        if rc == 0:
-            logger.info(f"Generated {CONFIG['VISUALIZATION_TYPE']}: {vis_file}")
-        else:
+        if rc != 0:
             logger.error(f"Error generating {CONFIG['VISUALIZATION_TYPE']} for {output_file}. Check {local_log}")
             with open(local_log, 'a') as f:
                 f.write(stderr + '\n')
+        else:
+            logger.info(f"Generated {CONFIG['VISUALIZATION_TYPE']}: {vis_file}")
 
     return True
 
@@ -426,7 +429,7 @@ def main():
                     volume = calculate_auto_volume(subdir_files, str(subdir), log_file)
                     if volume:
                         with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                            results = executor.map(lambda f: process_file(f, os.path.join(Path(f).parent, OUTPUT_DIRS[args.format]), volume, log_file), subdir_files)
+                            results = executor.map(lambda f: process_file(f, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume, log_file), subdir_files)
                             success &= all(results)
             else:
                 logger.error(f"No .dsf files found in {path} or its subdirectories")
@@ -443,7 +446,7 @@ def main():
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                        results = executor.map(lambda f: process_file(f, os.path.join(Path(f).parent, OUTPUT_DIRS[args.format]), args.volume, log_file), subdir_files)
+                        results = executor.map(lambda f: process_file(f, os.path.join(subdir, OUTPUT_DIRS[args.format]), args.volume, log_file), subdir_files)
                         success &= all(results)
             else:
                 logger.error(f"No .dsf files found in {path} or its subdirectories")
