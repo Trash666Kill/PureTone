@@ -1,0 +1,16 @@
+./puretone.py --debug Aero/
+./puretone.py --format flac --debug Aero/
+./puretone.py --format wav --volume auto --debug Aero/
+./puretone.py --volume analysis --debug Aero/
+./puretone.py --format flac --volume 2.5dB --debug Aero/
+./puretone.py --codec pcm_s32le --sample-rate 192000 --debug Aero/
+./puretone.py --loudnorm-I -16 --loudnorm-TP -2 --loudnorm-LRA 15 --debug Aero/
+./puretone.py --volume auto --headroom-limit -1.0 --debug Aero/
+./puretone.py --resampler soxr --precision 20 --cheby 0 --debug Aero/
+./puretone.py --spectrogram 1280x720 spectrogram separate --debug Aero/
+./puretone.py --spectrogram 1920x1080 waveform --debug Aero/
+./puretone.py --format flac --compression-level 8 --debug Aero/
+./puretone.py --log Aero_log.txt --debug Aero/
+./puretone.py --skip-existing --debug Aero/
+./puretone.py --parallel 4 --debug Aero/
+./puretone.py --format flac --debug Test1/06 Sweet Emotion.dsf
