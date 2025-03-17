@@ -1,5 +1,6 @@
 ./puretone.py --debug Aero/
 ./puretone.py --format flac --debug Aero/
+./puretone.py --format wavpack --debug Aero/
 ./puretone.py --format wav --volume auto --debug Aero/
 ./puretone.py --volume analysis --debug Aero/
 ./puretone.py --format flac --volume 2.5dB --debug Aero/
