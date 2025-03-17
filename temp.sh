@@ -1006,59 +1006,61 @@ if [ "$VOLUME" != "analysis" ]; then
     [ -n "$LOG_FILE" ] && echo "Elapsed time: $ELAPSED_TIME seconds" >> "$LOG_FILE"
 
     # Display file sizes, differences, and peak information
-    if [ -s "$TEMP_SIZE_LOG" ]; then
-        echo ""
-        echo "File sizes, differences, and peak information:"
+# Display file sizes, differences, and peak information
+if [ -s "$TEMP_SIZE_LOG" ]; then
+    echo ""
+    echo "File sizes, differences, and peak information:"
+    [ -n "$LOG_FILE" ] && {
+        echo "" >> "$LOG_FILE"
+        echo "File sizes, differences, and peak information:" >> "$LOG_FILE"
+    }
+    while IFS=':' read -r input_file input_mib wav_intermediate_file intermediate_mib output_file output_mib diff_percent; do
+        dir=$(dirname "$input_file")
+        log_file="${log_files[$dir]}"
+        {
+            echo "  Input: $input_file - $input_mib MiB"
+            input_peak_line=$(grep "^$input_file:Input:" "$TEMP_PEAK_LOG")
+            input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
+            input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
+            echo "    Max Volume: ${input_max_volume:-Not detected}"
+            echo "    Peak Level: ${input_peak_level:-Not detected}"
+            [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB"
+            echo "  Output: $output_file - $output_mib MiB"
+            output_peak_line=$(grep "^$output_file:Output:" "$TEMP_PEAK_LOG")
+            output_max_volume=$(echo "$output_peak_line" | cut -d':' -f3)
+            output_peak_level=$(echo "$output_peak_line" | cut -d':' -f4)
+            echo "    Max Volume: ${output_max_volume:-Not detected}"
+            echo "    Peak Level: ${output_peak_level:-Not detected}"
+            if [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ]; then
+                output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
+                headroom=$(echo "scale=1; $HEADROOM_LIMIT - $output_max_value" | bc)
+                echo "    Headroom to $HEADROOM_LIMIT dB: $headroom dB"
+            fi
+            if [ -n "$output_max_volume" ]; then
+                output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
+                if (( $(echo "$output_max_value > $HEADROOM_LIMIT" | bc -l) )); then
+                    echo "    WARNING: Output Max Volume ($output_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!"
+                fi
+            fi
+            echo "  Size difference (Output vs Input): $diff_percent%"
+            echo ""
+        } | tee -a "$log_file" > /dev/null  # Redireciona saída para log_file apenas, evitando duplicação no terminal
+        cat "$log_file" | tail -n 12  # Exibe as últimas 12 linhas no terminal (ajuste conforme necessário)
         [ -n "$LOG_FILE" ] && {
+            echo "  Input: $input_file - $input_mib MiB" >> "$LOG_FILE"
+            echo "    Max Volume: ${input_max_volume:-Not detected}" >> "$LOG_FILE"
+            echo "    Peak Level: ${input_peak_level:-Not detected}" >> "$LOG_FILE"
+            [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB" >> "$LOG_FILE"
+            echo "  Output: $output_file - $output_mib MiB" >> "$LOG_FILE"
+            echo "    Max Volume: ${output_max_volume:-Not detected}" >> "$LOG_FILE"
+            echo "    Peak Level: ${output_peak_level:-Not detected}" >> "$LOG_FILE"
+            [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ] && echo "    Headroom to $HEADROOM_LIMIT dB: $headroom dB" >> "$LOG_FILE"
+            [ -n "$output_max_volume" ] && (( $(echo "$output_max_value > $HEADROOM_LIMIT" | bc -l) )) && echo "    WARNING: Output Max Volume ($output_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!" >> "$LOG_FILE"
+            echo "  Size difference (Output vs Input): $diff_percent%" >> "$LOG_FILE"
             echo "" >> "$LOG_FILE"
-            echo "File sizes, differences, and peak information:" >> "$LOG_FILE"
         }
-        while IFS=':' read -r input_file input_mib wav_intermediate_file intermediate_mib output_file output_mib diff_percent; do
-            dir=$(dirname "$input_file")
-            log_file="${log_files[$dir]}"
-            {
-                echo "  Input: $input_file - $input_mib MiB"
-                input_peak_line=$(grep "^$input_file:Input:" "$TEMP_PEAK_LOG")
-                input_max_volume=$(echo "$input_peak_line" | cut -d':' -f3)
-                input_peak_level=$(echo "$input_peak_line" | cut -d':' -f4)
-                echo "    Max Volume: ${input_max_volume:-Not detected}"
-                echo "    Peak Level: ${input_peak_level:-Not detected}"
-                [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB"
-                echo "  Output: $output_file - $output_mib MiB"
-                output_peak_line=$(grep "^$output_file:Output:" "$TEMP_PEAK_LOG")
-                output_max_volume=$(echo "$output_peak_line" | cut -d':' -f3)
-                output_peak_level=$(echo "$output_peak_line" | cut -d':' -f4)
-                echo "    Max Volume: ${output_max_volume:-Not detected}"
-                echo "    Peak Level: ${output_peak_level:-Not detected}"
-                if [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ]; then
-                    output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
-                    headroom=$(echo "scale=1; $HEADROOM_LIMIT - $output_max_value" | bc)
-                    echo "    Headroom to $HEADROOM_LIMIT dB: $headroom dB"
-                fi
-                if [ -n "$output_max_volume" ]; then
-                    output_max_value=$(echo "$output_max_volume" | sed 's/ dB//')
-                    if (( $(echo "$output_max_value > $HEADROOM_LIMIT" | bc -l) )); then
-                        echo "    WARNING: Output Max Volume ($output_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!"
-                    fi
-                fi
-                echo "  Size difference (Output vs Input): $diff_percent%"
-                echo ""
-            } | tee -a "$log_file"
-            [ -n "$LOG_FILE" ] && {
-                echo "  Input: $input_file - $input_mib MiB" >> "$LOG_FILE"
-                echo "    Max Volume: ${input_max_volume:-Not detected}" >> "$LOG_FILE"
-                echo "    Peak Level: ${input_peak_level:-Not detected}" >> "$LOG_FILE"
-                [ "$OUTPUT_FORMAT" != "wav" ] && echo "  Intermediate WAV: $(echo "$wav_intermediate_file" | sed 's/_intermediate//') - $intermediate_mib MiB" >> "$LOG_FILE"
-                echo "  Output: $output_file - $output_mib MiB" >> "$LOG_FILE"
-                echo "    Max Volume: ${output_max_volume:-Not detected}" >> "$LOG_FILE"
-                echo "    Peak Level: ${output_peak_level:-Not detected}" >> "$LOG_FILE"
-                [ -n "$output_max_volume" ] && [ "$output_max_volume" != "Not detected" ] && echo "    Headroom to $HEADROOM_LIMIT dB: $headroom dB" >> "$LOG_FILE"
-                [ -n "$output_max_volume" ] && (( $(echo "$output_max_value > $HEADROOM_LIMIT" | bc -l) )) && echo "    WARNING: Output Max Volume ($output_max_volume) is above $HEADROOM_LIMIT dB, risk of clipping!" >> "$LOG_FILE"
-                echo "  Size difference (Output vs Input): $diff_percent%" >> "$LOG_FILE"
-                echo "" >> "$LOG_FILE"
-            }
-        done < "$TEMP_SIZE_LOG"
-    fi
+    done < "$TEMP_SIZE_LOG"
+fi
 
     # Append completion message to logs
     for log_file in "${log_files[@]}"; do
