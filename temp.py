@@ -6,6 +6,7 @@ import logging
 import time
 import re
 import sys
+import signal
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Dict, Optional
@@ -274,15 +275,26 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
 
     return True
 
-def cleanup():
-    logger.info("Script interrupted. Cleaning up temporary files...")
+def cleanup(signum=None, frame=None):
+    """Limpa arquivos temporários e sai gracefully em caso de interrupção."""
+    elapsed_time = int(time.time() - START_TIME)
+    logger.info(f"Script interrupted after {elapsed_time} seconds. Cleaning up temporary files...")
     for temp_file in TEMP_FILES.values():
         if os.path.exists(temp_file):
-            os.remove(temp_file)
+            try:
+                os.remove(temp_file)
+                logger.debug(f"Removed temporary file: {temp_file}")
+            except Exception as e:
+                logger.error(f"Failed to remove {temp_file}: {e}")
     for dirpath, _, filenames in os.walk('.'):
-        for file in filenames:
-            if file.endswith('_intermediate.wav'):
-                os.remove(os.path.join(dirpath, file))
+        for file in [f for f in filenames if f.endswith('_intermediate.wav')]:
+            file_path = os.path.join(dirpath, file)
+            try:
+                os.remove(file_path)
+                logger.debug(f"Removed intermediate file: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to remove {file_path}: {e}")
+    logger.info("Cleanup completed. Exiting.")
     sys.exit(1)
 
 def resolve_path(path_str: str) -> Path:
@@ -366,9 +378,9 @@ def main():
     start_time = time.time()
     success = True
 
-    import signal
-    signal.signal(signal.SIGINT, lambda sig, frame: cleanup())
-    signal.signal(signal.SIGTERM, lambda sig, frame: cleanup())
+    # Configurar manipuladores de sinais
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGTERM, cleanup)
 
     if path.is_file() and path.suffix == '.dsf':
         output_dir = os.path.join(path.parent, OUTPUT_DIRS[args.format])
@@ -466,6 +478,7 @@ def main():
             f.write(f"{'Process completed successfully!' if success else 'Process completed with errors!'}\n")
             f.write(f"Elapsed time: {elapsed_time} seconds\n")
 
+    # Limpeza final de arquivos temporários
     for temp_file in TEMP_FILES.values():
         if os.path.exists(temp_file):
             os.remove(temp_file)
