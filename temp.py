@@ -303,6 +303,14 @@ def resolve_path(path_str: str) -> Path:
         return Path(path_str)
     return Path(os.path.join(os.getcwd(), path_str))
 
+def process_files_in_parallel(files: List[str], output_dir: str, volume: str = None, log_file: Optional[str] = None) -> bool:
+    """Process a list of files in parallel using ThreadPoolExecutor."""
+    logger.info(f"Starting parallel processing with {CONFIG['PARALLEL_JOBS']} workers for {len(files)} files")
+    with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
+        results = list(executor.map(lambda f: process_file(f, output_dir, volume, log_file), files))
+    logger.info(f"Completed parallel processing for {len(files)} files")
+    return all(results)
+
 def main():
     parser = argparse.ArgumentParser(
         description="""
@@ -461,7 +469,7 @@ PureTone is a Python tool designed to convert DSD (.dsf) audio files into high-q
             logger.error(f"Invalid compression level for {CONFIG['OUTPUT_FORMAT']}")
             sys.exit(1)
     if args.skip_existing: CONFIG['SKIP_EXISTING'] = True
-    if args.parallel: CONFIG['PARALLEL_JOBS'] = args.parallel
+    if args.parallel: CONFIG['PARALLEL_JOBS'] = max(1, args.parallel)  # Ensure at least 1 worker
     log_file = args.log
 
     for cmd in ['ffmpeg', 'ffprobe']:
@@ -528,36 +536,28 @@ PureTone is a Python tool designed to convert DSD (.dsf) audio files into high-q
                 logger.info(f"Processing directory: {path}")
                 volume = calculate_auto_volume(files, "", log_file)
                 if volume:
-                    with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                        results = executor.map(lambda f: process_file(f, os.path.join(Path(f).parent, OUTPUT_DIRS[args.format]), volume, log_file), files)
-                        success &= all(results)
-            elif subdirs:
+                    success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume, log_file)
+            if subdirs:  # Process subdirectories sequentially to respect headroom per subdir
                 logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     volume = calculate_auto_volume(subdir_files, str(subdir), log_file)
                     if volume:
-                        with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                            results = executor.map(lambda f: process_file(f, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume, log_file), subdir_files)
-                            success &= all(results)
-            else:
+                        success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume, log_file)
+            if not files and not subdirs:
                 logger.error(f"No .dsf files found in {path} or its subdirectories")
                 success = False
 
         else:
             if files:
                 logger.info(f"Processing directory: {path}")
-                with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                    results = executor.map(lambda f: process_file(f, os.path.join(Path(f).parent, OUTPUT_DIRS[args.format]), args.volume, log_file), files)
-                    success &= all(results)
-            elif subdirs:
+                success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), args.volume, log_file)
+            if subdirs:  # Process subdirectories sequentially
                 logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
-                    with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                        results = executor.map(lambda f: process_file(f, os.path.join(subdir, OUTPUT_DIRS[args.format]), args.volume, log_file), subdir_files)
-                        success &= all(results)
-            else:
+                    success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), args.volume, log_file)
+            if not files and not subdirs:
                 logger.error(f"No .dsf files found in {path} or its subdirectories")
                 success = False
     else:
