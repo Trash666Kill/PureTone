@@ -11,6 +11,13 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Dict, Optional
 import shutil
+import termios
+import tty
+
+# Salvar o estado do terminal no início
+ORIGINAL_TERMINAL_STATE = None
+if sys.stdin.isatty():
+    ORIGINAL_TERMINAL_STATE = termios.tcgetattr(sys.stdin)
 
 # Configuração de logging (similar ao dmesg)
 START_TIME = time.time()
@@ -276,7 +283,7 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
     return True
 
 def cleanup(signum=None, frame=None):
-    """Clean up temporary files and exit gracefully on interruption."""
+    """Clean up temporary files and reset terminal state before exiting."""
     elapsed_time = int(time.time() - START_TIME)
     logger.info(f"Script interrupted after {elapsed_time} seconds. Cleaning up temporary files...")
     for temp_file in TEMP_FILES.values():
@@ -294,6 +301,11 @@ def cleanup(signum=None, frame=None):
                 logger.debug(f"Removed intermediate file: {file_path}")
             except Exception as e:
                 logger.error(f"Failed to remove {file_path}: {e}")
+    # Restaurar o estado original do terminal
+    if ORIGINAL_TERMINAL_STATE is not None and sys.stdin.isatty():
+        sys.stdout.flush()
+        sys.stderr.flush()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, ORIGINAL_TERMINAL_STATE)
     logger.info("Cleanup completed. Exiting.")
     sys.exit(1)
 
@@ -578,6 +590,12 @@ PureTone is a Python tool designed to convert DSD (.dsf) audio files into high-q
     for temp_file in TEMP_FILES.values():
         if os.path.exists(temp_file):
             os.remove(temp_file)
+    
+    # Restaurar o estado original do terminal ao final
+    if ORIGINAL_TERMINAL_STATE is not None and sys.stdin.isatty():
+        sys.stdout.flush()
+        sys.stderr.flush()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, ORIGINAL_TERMINAL_STATE)
 
 if __name__ == "__main__":
     main()
