@@ -81,6 +81,12 @@ def validate_resolution(resolution: str) -> bool:
 def validate_volume(volume: str) -> bool:
     return bool(re.match(r'^[-+]?[0-9]*\.?[0-9]+dB$', volume))
 
+def validate_addition(addition: str) -> bool:
+    if not validate_volume(addition):
+        return False
+    value = float(addition.replace('dB', ''))
+    return value >= 0  # Só permite valores não negativos
+
 def add_db(value_db: str, addition_db: str) -> str:
     value = float(value_db.replace('dB', '')) if value_db != 'N/A' else 0
     addition = float(addition_db.replace('dB', '')) if addition_db else 0
@@ -361,7 +367,6 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
                 f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
 
 def main():
-    # Descrição detalhada para o --help
     description = """
 PureTone - Conversor de DSD para Áudio de Alta Qualidade
 
@@ -377,7 +382,7 @@ Fluxo Detalhado de Funcionamento:
    - Cria arquivos WAV temporários para análise.
    - Calcula volumes máximos (DSD e WAV) usando ffmpeg.
    - Determina ajustes de volume (y) para evitar clipping, respeitando o limite de headroom (--headroom-limit).
-   - Aplica acréscimo adicional (--addition) ao volume ajustado, se especificado.
+   - Aplica acréscimo adicional (--addition) ao volume ajustado, se especificado (apenas com --volume auto).
 4. **Processamento de Arquivos**:
    - Converte cada arquivo para WAV intermediário com resampling e ajustes de volume.
    - Converte WAV intermediário para o formato final (WAV, WavPack ou FLAC).
@@ -398,7 +403,7 @@ Valores Padrão:
 - Pico verdadeiro (--loudnorm-TP): -1 dBTP
 - Faixa de loudness (--loudnorm-LRA): 20 LU
 - Ajuste de volume (--volume): None (usa loudnorm por padrão)
-- Acréscimo adicional (--addition): 0dB
+- Acréscimo adicional (--addition): 0dB (só com --volume auto, valores negativos não permitidos)
 - Limite de headroom (--headroom-limit): -0.5 dB
 - Resampler (--resampler): soxr
 - Precisão do resampler (--precision): 28
@@ -447,7 +452,7 @@ Exemplos Práticos:
     parser.add_argument('--loudnorm-TP', help="Limite de pico verdadeiro em dBTP. Padrão: -1")
     parser.add_argument('--loudnorm-LRA', help="Faixa de loudness em LU. Padrão: 20")
     parser.add_argument('--volume', help="Ajuste de volume: valor fixo (ex.: '2.5dB'), 'auto' ou 'analysis'. Padrão: None")
-    parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB') a ser aplicado após cálculo automático. Padrão: 0dB")
+    parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB') a ser aplicado apenas com --volume auto. Valores negativos não permitidos. Padrão: 0dB")
     parser.add_argument('--headroom-limit', type=float, help="Volume máximo permitido em dB. Padrão: -0.5")
     parser.add_argument('--resampler', help="Motor de resampling (ex.: soxr). Padrão: soxr")
     parser.add_argument('--precision', type=int, help="Precisão do resampler (ex.: 20-28). Padrão: 28")
@@ -472,10 +477,14 @@ Exemplos Práticos:
             sys.exit(1)
         CONFIG['VOLUME'] = args.volume
 
-    if args.addition and not validate_volume(args.addition):
-        logger.error("Addition deve estar no formato 'XdB' (ex.: '1dB', '-2.5dB')")
-        sys.exit(1)
-    CONFIG['ADDITION'] = args.addition
+    if args.addition:
+        if not validate_addition(args.addition):
+            logger.error("Addition deve estar no formato 'XdB' (ex.: '1dB', '2.5dB') e não pode ser negativo")
+            sys.exit(1)
+        if args.volume != 'auto':
+            logger.error("--addition só pode ser usado com --volume auto")
+            sys.exit(1)
+        CONFIG['ADDITION'] = args.addition
 
     if args.codec: CONFIG['ACODEC'] = args.codec
     if args.sample_rate: CONFIG['AR'] = str(args.sample_rate)
