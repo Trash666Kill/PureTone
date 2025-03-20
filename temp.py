@@ -81,13 +81,10 @@ def validate_volume(volume: str) -> bool:
     return bool(re.match(r'^[-+]?[0-9]*\.?[0-9]+dB$', volume))
 
 def analyze_peaks(file: str, peak_log: str, log_type: str) -> Optional[float]:
-    """Analisa picos de volume do arquivo e retorna o max_volume em dB."""
     _, stderr, rc = run_command(['ffmpeg', '-i', file, '-af', 'volumedetect', '-f', 'null', '-'])
     max_volume = re.search(r'max_volume: ([-0-9.]* dB)', stderr)
-    if max_volume:
-        max_volume_db = float(max_volume.group(1).replace(' dB', ''))
-    else:
-        max_volume_db = None
+    max_volume_db = float(max_volume.group(1).replace(' dB', '')) if max_volume else None
+    if max_volume_db is None:
         logger.warning(f"Max volume not detected for {file}")
 
     _, stderr, rc = run_command(['ffmpeg', '-i', file, '-af', 'astats=metadata=1,ametadata=print:key=lavfi.astats.Overall.Peak_level', '-f', 'null', '-'])
@@ -99,7 +96,6 @@ def analyze_peaks(file: str, peak_log: str, log_type: str) -> Optional[float]:
     return max_volume_db
 
 def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optional[str] = None) -> Tuple[List[Tuple[str, str]], List[dict]]:
-    """Calcula o ajuste de volume para cada arquivo com base em y, ajustando se necessário para o limite de -0.5 dB."""
     if os.path.exists(TEMP_FILES['PEAK_LOG']):
         os.remove(TEMP_FILES['PEAK_LOG'])
     if os.path.exists(TEMP_FILES['VOLUME_LOG']):
@@ -108,13 +104,11 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
     volume_adjustments = []
     temp_wav_files = []
 
-    # Passo 1: Calcula y para cada arquivo
     for input_file in files:
         base_name = Path(input_file).stem
         temp_wav = f"/tmp/puretone_{os.getpid()}_{base_name}_temp.wav"
         temp_wav_files.append(temp_wav)
 
-        # Converte DSD para WAV sem ajustes de volume
         cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'],
                '-map_metadata', CONFIG['MAP_METADATA'], '-af', f"aresample=resampler={CONFIG['RESAMPLER']}:precision={CONFIG['PRECISION']}:cheby={CONFIG['CHEBY']}", temp_wav, '-y']
         _, stderr, rc = run_command(cmd)
@@ -122,7 +116,6 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
             logger.error(f"Failed to create temporary WAV for {input_file}: {stderr}")
             continue
 
-        # Analisa picos do DSD e do WAV temporário
         dsd_max_volume = analyze_peaks(input_file, TEMP_FILES['PEAK_LOG'], "DSD")
         wav_max_volume = analyze_peaks(temp_wav, TEMP_FILES['PEAK_LOG'], "WAV")
 
@@ -130,16 +123,13 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
             logger.warning(f"Skipping volume calculation for {input_file}: peak data unavailable")
             continue
 
-        # Calcula y = -(WAV_Max_dB - DSD_Max_dB)
         y = -(wav_max_volume - dsd_max_volume)
         logger.info(f"File {input_file}: DSD Max Volume = {dsd_max_volume:.1f} dB, WAV Max Volume = {wav_max_volume:.1f} dB, y = {y:.1f} dB")
 
-        # Registra y e o max_volume do WAV temporário
         with open(TEMP_FILES['VOLUME_LOG'], 'a') as f:
             f.write(f"{input_file}:{y:.1f}:{wav_max_volume:.1f}\n")
         volume_adjustments.append({'file': input_file, 'y': y, 'wav_max_volume': wav_max_volume})
 
-    # Limpa arquivos temporários WAV
     for temp_wav in temp_wav_files:
         if os.path.exists(temp_wav):
             os.remove(temp_wav)
@@ -148,25 +138,21 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
         logger.error(f"No valid volume data calculated for files in {subdir or 'current directory'}")
         return [], []
 
-    # Passo 2: Verifica se algum volume ajustado ultrapassa -0.5 dB
     final_volumes = []
-    max_volumes = [entry['wav_max_volume'] + entry['y'] for entry in volume_adjustments]  # Volume final estimado
+    max_volumes = [entry['wav_max_volume'] + entry['y'] for entry in volume_adjustments]
     highest_volume = max(max_volumes)
 
     if highest_volume > CONFIG['HEADROOM_LIMIT']:
-        # Calcula ajuste uniforme para manter o maior volume em -0.5 dB
         adjustment = CONFIG['HEADROOM_LIMIT'] - highest_volume
         logger.info(f"Highest adjusted volume ({highest_volume:.1f} dB) exceeds limit ({CONFIG['HEADROOM_LIMIT']} dB). Applying uniform adjustment of {adjustment:.1f} dB")
         for entry in volume_adjustments:
             final_volume = f"{(entry['y'] + adjustment):.1f}dB"
             final_volumes.append((entry['file'], final_volume))
     else:
-        # Usa os valores individuais de y, pois não ultrapassam -0.5 dB
         logger.info(f"No adjusted volumes exceed {CONFIG['HEADROOM_LIMIT']} dB. Using individual y values as volume adjustments")
         for entry in volume_adjustments:
             final_volumes.append((entry['file'], f"{entry['y']:.1f}dB"))
 
-    # Registra no log, se especificado
     if log_file:
         with open(log_file, 'a') as f:
             for entry in volume_adjustments:
@@ -295,7 +281,6 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
     return True
 
 def cleanup(signum=None, frame=None):
-    """Clean up temporary files and reset terminal state before exiting."""
     elapsed_time = int(time.time() - START_TIME)
     logger.info(f"Script interrupted after {elapsed_time} seconds. Cleaning up temporary files...")
     for temp_file in TEMP_FILES.values():
@@ -321,13 +306,11 @@ def cleanup(signum=None, frame=None):
     sys.exit(1)
 
 def resolve_path(path_str: str) -> Path:
-    """Resolve the provided path, assuming current directory if no prefix is given."""
     if '/' in path_str or path_str.startswith('./') or path_str.startswith('../'):
         return Path(path_str)
     return Path(os.path.join(os.getcwd(), path_str))
 
 def process_files_in_parallel(files: List[str], output_dir: str, volume_map: List[Tuple[str, str]], log_file: Optional[str] = None) -> bool:
-    """Processa uma lista de arquivos em paralelo usando ajustes de volume individuais."""
     logger.info(f"Starting parallel processing with {CONFIG['PARALLEL_JOBS']} workers for {len(files)} files")
     with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
         results = []
@@ -337,12 +320,16 @@ def process_files_in_parallel(files: List[str], output_dir: str, volume_map: Lis
     logger.info(f"Completed parallel processing for {len(files)} files")
     return all(outcomes)
 
-def print_volume_summary(volume_data: List[dict], volume_map: List[Tuple[str, str]], log_file: Optional[str] = None):
-    """Imprime um resumo dos valores calculados e ajustes aplicados."""
+def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[str, str]]], log_file: Optional[str] = None):
     logger.info("\n=== Volume Adjustment Summary ===")
     logger.info(f"{'File':<40} {'y (dB) ffmpeg auto-tuning':<25} {'WAV Max Volume (dB)':<20} {'Applied Volume (dB)':<20}")
     logger.info("-" * 105)
-    volume_dict = {file: vol for file, vol in volume_map}
+
+    # Combina todos os volume_maps em um único dicionário para busca rápida
+    volume_dict = {}
+    for v_map in volume_maps:
+        volume_dict.update({file: vol for file, vol in v_map})
+
     for entry in volume_data:
         applied_volume = volume_dict.get(entry['file'], "N/A")
         logger.info(f"{entry['file'][:38]:<40} {entry['y']:<25.1f} {entry['wav_max_volume']:<20.1f} {applied_volume:<20}")
@@ -440,6 +427,7 @@ def main():
     start_time = time.time()
     success = True
     all_volume_data = []
+    all_volume_maps = []  # Lista para armazenar volume_maps de cada subdiretório
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
@@ -449,6 +437,7 @@ def main():
         if args.volume == 'auto':
             volume_map, volume_data = calculate_volume_adjustment([str(path)], "", log_file)
             all_volume_data.extend(volume_data)
+            all_volume_maps.append(volume_map)
             if volume_map:
                 success &= process_file(str(path), output_dir, volume_map[0][1], log_file)
             else:
@@ -465,6 +454,7 @@ def main():
                 logger.info(f"Processing directory: {path}")
                 volume_map, volume_data = calculate_volume_adjustment(files, "", log_file)
                 all_volume_data.extend(volume_data)
+                all_volume_maps.append(volume_map)
                 success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if subdirs:
                 logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
@@ -472,6 +462,7 @@ def main():
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     volume_map, volume_data = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
                     all_volume_data.extend(volume_data)
+                    all_volume_maps.append(volume_map)
                     success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if not files and not subdirs:
                 logger.error(f"No .dsf files found in {path} or its subdirectories")
@@ -500,7 +491,7 @@ def main():
     logger.info(f"Elapsed time: {elapsed_time} seconds")
 
     if all_volume_data and args.volume == 'auto':
-        print_volume_summary(all_volume_data, volume_map, log_file)
+        print_volume_summary(all_volume_data, all_volume_maps, log_file)
 
     if log_file:
         with open(log_file, 'a') as f:
