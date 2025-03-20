@@ -188,42 +188,35 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
     af_base = f"aresample=resampler={CONFIG['RESAMPLER']}:precision={CONFIG['PRECISION']}:cheby={CONFIG['CHEBY']}"
     analyze_peaks(input_file, TEMP_FILES['PEAK_LOG'], "Input")
 
-    # Tentar detectar redução implícita de DSD->PCM pelo FFmpeg
-    delta = None
-    if volume:  # Só tenta detectar se um volume for especificado
-        test_wav = f"/tmp/puretone_{os.getpid()}_test.wav"
-        run_command(['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'], test_wav, '-y'])
-        analyze_peaks(test_wav, TEMP_FILES['PEAK_LOG'], "Test")
-        input_max_volume = None
-        test_max_volume = None
-        with open(TEMP_FILES['PEAK_LOG']) as f:
-            for line in f:
-                if line.startswith(f"{input_file}:Input:"):
-                    _, _, input_max_volume, _ = line.strip().split(':', 3)
-                if line.startswith(f"{test_wav}:Test:"):
-                    _, _, test_max_volume, _ = line.strip().split(':', 3)
-        if input_max_volume and test_max_volume and input_max_volume != 'Not detected' and test_max_volume != 'Not detected':
-            delta = float(input_max_volume.replace(' dB', '')) - float(test_max_volume.replace(' dB', ''))
-            logger.debug(f"DSD->PCM reduction detected: {delta:.1f} dB")
-        else:
-            logger.warning(f"Could not detect DSD->PCM reduction for {input_file}, proceeding without compensation")
-        if os.path.exists(test_wav):
-            os.remove(test_wav)
+    # Detectar redução implícita de DSD->PCM pelo FFmpeg
+    test_wav = f"/tmp/puretone_{os.getpid()}_test.wav"
+    run_command(['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'], test_wav, '-y'])
+    analyze_peaks(test_wav, TEMP_FILES['PEAK_LOG'], "Test")
+    input_max_volume = None
+    test_max_volume = None
+    with open(TEMP_FILES['PEAK_LOG']) as f:
+        for line in f:
+            if line.startswith(f"{input_file}:Input:"):
+                _, _, input_max_volume, _ = line.strip().split(':', 3)
+            if line.startswith(f"{test_wav}:Test:"):
+                _, _, test_max_volume, _ = line.strip().split(':', 3)
+    if input_max_volume and test_max_volume and input_max_volume != 'Not detected' and test_max_volume != 'Not detected':
+        delta = float(input_max_volume.replace(' dB', '')) - float(test_max_volume.replace(' dB', ''))
+        logger.debug(f"DSD->PCM reduction detected: {delta:.1f} dB")
+    else:
+        delta = 2.1  # Valor padrão baseado em testes
+        logger.warning(f"Could not detect DSD->PCM reduction, using default: {delta:.1f} dB")
+    if os.path.exists(test_wav):
+        os.remove(test_wav)
 
     if volume:
-        # Aplicar volume com ou sem compensação, dependendo do delta
+        # Compensar a redução implícita
         volume_value = float(volume.replace('dB', ''))
-        if delta is not None and delta != 0:  # Só compensa se delta for detectado e diferente de zero
-            adjusted_volume = f"{volume_value + delta:.1f}dB"
-            af = f"{af_base},volume={adjusted_volume}"
-            logger.debug(f"Applying adjusted volume: {adjusted_volume} to compensate {delta:.1f} dB DSD->PCM reduction")
-        else:
-            adjusted_volume = f"{volume_value:.1f}dB"
-            af = f"{af_base},volume={adjusted_volume}"
-            logger.debug(f"Applying original volume: {adjusted_volume} (no DSD->PCM reduction detected or needed)")
-
+        adjusted_volume = f"{volume_value + delta:.1f}dB"
+        af = f"{af_base},volume={adjusted_volume}"
         cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'],
                '-map_metadata', CONFIG['MAP_METADATA'], '-af', af, intermediate_wav, '-y']
+        logger.debug(f"Applying adjusted volume: {adjusted_volume} to compensate {delta:.1f} dB DSD->PCM reduction")
         _, stderr, rc = run_command(cmd)
         if rc != 0 or not os.path.exists(intermediate_wav):
             logger.error(f"Error creating intermediate WAV for {input_file}. Check {local_log}")
@@ -421,7 +414,7 @@ PureTone is a Python tool designed to convert DSD (.dsf) audio files into high-q
   - Formula: Adjusts audio to match `LOUDNORM_I`, `LOUDNORM_TP`, `LOUDNORM_LRA` while preserving dynamics.
 
 - **DSD->PCM Safety Delta (process_file)**:
-  - FFmpeg may apply an implicit gain reduction (e.g., -2.1 dB) when converting DSD to PCM to prevent clipping, as DSD peaks can exceed 0 dBFS. The script attempts to detect this delta by comparing the `max_volume` of the raw DSD and the converted PCM, then compensates by adding it to the specified `--volume`. If detection fails, it proceeds without compensation. Example: If DSD `max_volume` is -1.3 dB and PCM is -3.4 dB, delta = -2.1 dB; for `--volume 0.8dB`, adjusted volume becomes 2.9dB to achieve -0.5 dB.
+  - FFmpeg applies an implicit gain reduction (typically -2.1 dB) when converting DSD to PCM to prevent clipping, as DSD peaks can exceed 0 dBFS. The script detects this delta by comparing the `max_volume` of the raw DSD and the converted PCM, then compensates by adding it to the specified `--volume`. Example: If DSD `max_volume` is -1.3 dB and PCM is -3.4 dB, delta = -2.1 dB; for `--volume 0.8dB`, adjusted volume becomes 2.9dB to achieve -0.5 dB.
 
 ### Default Parameters:
 - ACODEC: pcm_s24le
@@ -465,7 +458,7 @@ PureTone is a Python tool designed to convert DSD (.dsf) audio files into high-q
     parser.add_argument('--loudnorm-TP', help="True peak limit in dBTP (e.g., -2). Default: -1")
     parser.add_argument('--loudnorm-LRA', help="Loudness range in LU (e.g., 15). Default: 20")
     parser.add_argument('--volume',
-                        help="Volume adjustment: fixed value (e.g., '2.5dB', '-1dB'), 'auto' for automatic calculation, or 'analysis' to only analyze without conversion. Note: For DSD inputs, FFmpeg may apply a safety reduction (e.g., -2.1 dB) during PCM conversion, which is automatically compensated if detected; otherwise, proceeds without adjustment. Default: None")
+                        help="Volume adjustment: fixed value (e.g., '2.5dB', '-1dB'), 'auto' for automatic calculation, or 'analysis' to only analyze without conversion. Note: For DSD inputs, FFmpeg applies a safety reduction (e.g., -2.1 dB) during PCM conversion, which is automatically compensated by the script. Default: None")
     parser.add_argument('--headroom-limit', type=float,
                         help="Maximum allowed peak volume in dB before clipping warning (e.g., -1.0). Default: -0.5")
     parser.add_argument('--resampler', help="Resampler engine (e.g., soxr, speex). Default: soxr")
