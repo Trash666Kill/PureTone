@@ -11,6 +11,13 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Dict, Optional
 import shutil
+import termios
+import tty
+
+# Salvar o estado do terminal no início
+ORIGINAL_TERMINAL_STATE = None
+if sys.stdin.isatty():
+    ORIGINAL_TERMINAL_STATE = termios.tcgetattr(sys.stdin)
 
 # Configuração de logging (similar ao dmesg)
 START_TIME = time.time()
@@ -276,7 +283,7 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
     return True
 
 def cleanup(signum=None, frame=None):
-    """Limpa arquivos temporários e sai gracefully em caso de interrupção."""
+    """Clean up temporary files and reset terminal state before exiting."""
     elapsed_time = int(time.time() - START_TIME)
     logger.info(f"Script interrupted after {elapsed_time} seconds. Cleaning up temporary files...")
     for temp_file in TEMP_FILES.values():
@@ -294,36 +301,147 @@ def cleanup(signum=None, frame=None):
                 logger.debug(f"Removed intermediate file: {file_path}")
             except Exception as e:
                 logger.error(f"Failed to remove {file_path}: {e}")
+    # Restaurar o estado original do terminal
+    if ORIGINAL_TERMINAL_STATE is not None and sys.stdin.isatty():
+        sys.stdout.flush()
+        sys.stderr.flush()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, ORIGINAL_TERMINAL_STATE)
     logger.info("Cleanup completed. Exiting.")
     sys.exit(1)
 
 def resolve_path(path_str: str) -> Path:
-    """Resolve o caminho fornecido, assumindo diretório atual se não houver prefixo."""
+    """Resolve the provided path, assuming current directory if no prefix is given."""
     if '/' in path_str or path_str.startswith('./') or path_str.startswith('../'):
         return Path(path_str)
     return Path(os.path.join(os.getcwd(), path_str))
 
+def process_files_in_parallel(files: List[str], output_dir: str, volume: str = None, log_file: Optional[str] = None) -> bool:
+    """Process a list of files in parallel using ThreadPoolExecutor."""
+    logger.info(f"Starting parallel processing with {CONFIG['PARALLEL_JOBS']} workers for {len(files)} files")
+    with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
+        results = list(executor.map(lambda f: process_file(f, output_dir, volume, log_file), files))
+    logger.info(f"Completed parallel processing for {len(files)} files")
+    return all(results)
+
 def main():
-    parser = argparse.ArgumentParser(description="PureTone - DSD to High-Quality Audio Converter", add_help=False)
-    parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav', help="Output format (default: wav)")
-    parser.add_argument('--codec', help="Audio codec (e.g., pcm_s32le)")
-    parser.add_argument('--sample-rate', type=int, help="Sample rate (e.g., 176400)")
-    parser.add_argument('--map-metadata', help="Metadata mapping (e.g., 0)")
-    parser.add_argument('--loudnorm-I', help="Integrated loudness (e.g., -14)")
-    parser.add_argument('--loudnorm-TP', help="True peak (e.g., -1)")
-    parser.add_argument('--loudnorm-LRA', help="Loudness range (e.g., 20)")
-    parser.add_argument('--volume', help="Volume adjustment (e.g., 2.5dB), 'auto', or 'analysis'")
-    parser.add_argument('--headroom-limit', type=float, help="Headroom limit in dB (e.g., -0.5)")
-    parser.add_argument('--resampler', help="Resampler engine (e.g., soxr)")
-    parser.add_argument('--precision', type=int, help="Resampler precision (e.g., 28)")
-    parser.add_argument('--cheby', choices=['0', '1'], help="Chebyshev mode (0 or 1)")
-    parser.add_argument('--spectrogram', nargs='*', help="Enable visualization (e.g., 1920x1080 spectrogram separate)")
-    parser.add_argument('--compression-level', type=int, help="Compression level (0-6 for wavpack, 0-12 for flac)")
-    parser.add_argument('--skip-existing', action='store_true', help="Skip existing output files")
-    parser.add_argument('--parallel', type=int, help="Number of parallel jobs")
-    parser.add_argument('--log', help="Log file for analysis results")
-    parser.add_argument('--debug', action='store_true', help="Enable debug logging")
-    parser.add_argument('path', help="Path to directory or .dsf file")
+    parser = argparse.ArgumentParser(
+        description="""
+PureTone - DSD to High-Quality Audio Converter
+
+PureTone is a Python tool designed to convert DSD (.dsf) audio files into high-quality formats (WAV, WavPack, FLAC) using FFmpeg. It provides advanced features like volume normalization, resampling, peak analysis, and optional visualization (spectrograms or waveforms). The tool supports both single files and directories with parallel processing capabilities.
+
+### Features:
+- Convert .dsf files to WAV, WavPack, or FLAC with customizable codecs and compression.
+- Adjust volume manually, automatically, or analyze without conversion.
+- Resample audio with high precision using the SoX resampler (soxr).
+- Generate spectrograms or waveforms for visual analysis.
+- Process multiple files in parallel for efficiency.
+
+### Usage Examples and Flow:
+1. **Convert a single file to WAV with default settings:**
+   `$ python3 puretone.py /path/to/file.dsf`
+   - **Flow**: Checks if the path is a .dsf file, creates an output directory 'wv', processes the file using default loudness normalization (I=-14, TP=-1, LRA=20), resamples to 176400 Hz with soxr, and saves as WAV. No volume adjustment unless specified.
+
+2. **Convert a directory to FLAC with automatic volume adjustment and 4 parallel jobs:**
+   `$ python3 puretone.py --format flac --volume auto --parallel 4 /path/to/dir`
+   - **Flow**: Scans the directory for .dsf files, creates a 'flac' subdirectory, analyzes headroom for all files, calculates a volume adjustment to avoid clipping (based on smallest headroom), processes files in parallel (4 threads), converts to FLAC with compression level 0, and cleans up temporary files.
+
+3. **Analyze volume without conversion and save results to a log:**
+   `$ python3 puretone.py --volume analysis --log results.txt /path/to/dir`
+   - **Flow**: Scans the directory (and subdirectories) for .dsf files, analyzes peak volume and headroom for each, logs results (max volume, peak level, headroom) to 'results.txt', calculates statistics (min, max, avg headroom), and exits without conversion.
+
+4. **Generate a spectrogram with custom resolution:**
+   `$ python3 puretone.py --spectrogram 1280x720 spectrogram separate /path/to/file.dsf`
+   - **Flow**: Processes the .dsf file to WAV (default format), creates a 'wv' directory, enables visualization, generates a spectrogram (1280x720, separate channels) in a 'spectrogram' subdirectory, and logs the result.
+
+### Key Calculations and Logic:
+- **Peak Analysis (analyze_peaks)**:
+  - Uses FFmpeg's `volumedetect` to find `max_volume` (in dB) and `astats` for `Peak_level` (in dBFS).
+  - Logic: Extracts peak data and writes to a log file for further processing.
+
+- **Headroom Calculation (analyze_volume_file)**:
+  - Formula: `headroom = HEADROOM_LIMIT - max_volume`.
+  - If `max_volume > HEADROOM_LIMIT`, warns of clipping risk.
+  - Example: If `max_volume = -0.2 dB` and `HEADROOM_LIMIT = -0.5 dB`, then `headroom = -0.5 - (-0.2) = -0.3 dB` (negative indicates clipping risk).
+
+- **Auto Volume Adjustment (calculate_auto_volume)**:
+  - Steps:
+    1. Analyzes headroom for all files.
+    2. Finds `min_headroom` (smallest headroom).
+    3. Sets initial `volume = min_headroom`.
+    4. For each file, checks if `new_max_volume = (HEADROOM_LIMIT - headroom) + min_headroom > HEADROOM_LIMIT`.
+    5. If true, adjusts `volume = HEADROOM_LIMIT - (HEADROOM_LIMIT - headroom)` to prevent clipping.
+  - Example: Files with headrooms [2.0, 1.0, 0.5], `HEADROOM_LIMIT = -0.5 dB`. Initial `volume = 0.5 dB`. If applying 0.5 dB to file with headroom 2.0 results in `-0.5 - 2.0 + 0.5 = -2.0 dB` (safe), but checks all files and adjusts if any exceed -0.5 dB.
+
+- **Loudness Normalization (process_file)**:
+  - Uses FFmpeg's `loudnorm` filter in two passes:
+    1. Measures input metrics (I, LRA, TP, threshold).
+    2. Applies normalization with target I, TP, LRA using measured values.
+  - Formula: Adjusts audio to match `LOUDNORM_I`, `LOUDNORM_TP`, `LOUDNORM_LRA` while preserving dynamics.
+
+### Default Parameters:
+- ACODEC: pcm_s24le
+- AR (Sample Rate): 176400 Hz
+- MAP_METADATA: 0
+- LOUDNORM_I: -14 LUFS
+- LOUDNORM_TP: -1 dBTP
+- LOUDNORM_LRA: 20 LU
+- VOLUME: None
+- RESAMPLER: soxr
+- PRECISION: 28
+- CHEBY: 1
+- OUTPUT_FORMAT: wav
+- WAVPACK_COMPRESSION: 0
+- FLAC_COMPRESSION: 0
+- OVERWRITE: True
+- SKIP_EXISTING: False
+- PARALLEL_JOBS: 2
+- ENABLE_VISUALIZATION: False
+- VISUALIZATION_TYPE: spectrogram
+- VISUALIZATION_SIZE: 1920x1080
+- SPECTROGRAM_MODE: combined
+- HEADROOM_LIMIT: -0.5 dB
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False
+    )
+
+    parser.add_argument(
+        '-h', '--help', action='help',
+        help="Show this help message and exit."
+    )
+
+    parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav',
+                        help="Output format: 'wav' (uncompressed), 'wavpack' (lossless), or 'flac' (lossless). Default: wav")
+    parser.add_argument('--codec', help="Audio codec for WAV output (e.g., pcm_s32le). Default: pcm_s24le")
+    parser.add_argument('--sample-rate', type=int,
+                        help="Sample rate in Hz (e.g., 88200, 176400). Default: 176400")
+    parser.add_argument('--map-metadata', help="Metadata mapping (e.g., 0 to keep, -1 to strip). Default: 0")
+    parser.add_argument('--loudnorm-I', help="Integrated loudness target in LUFS (e.g., -16). Default: -14")
+    parser.add_argument('--loudnorm-TP', help="True peak limit in dBTP (e.g., -2). Default: -1")
+    parser.add_argument('--loudnorm-LRA', help="Loudness range in LU (e.g., 15). Default: 20")
+    parser.add_argument('--volume',
+                        help="Volume adjustment: fixed value (e.g., '2.5dB', '-1dB'), 'auto' for automatic calculation, or 'analysis' to only analyze without conversion. Default: None")
+    parser.add_argument('--headroom-limit', type=float,
+                        help="Maximum allowed peak volume in dB before clipping warning (e.g., -1.0). Default: -0.5")
+    parser.add_argument('--resampler', help="Resampler engine (e.g., soxr, speex). Default: soxr")
+    parser.add_argument('--precision', type=int,
+                        help="Resampler precision (higher is better, e.g., 20-28). Default: 28")
+    parser.add_argument('--cheby', choices=['0', '1'],
+                        help="Enable Chebyshev mode for SoX resampler (1 = on, 0 = off). Default: 1")
+    parser.add_argument('--spectrogram', nargs='*',
+                        help="Enable visualization: '<width>x<height> [type [mode]]' (e.g., '1920x1080 waveform' or '1280x720 spectrogram separate'). Types: 'spectrogram', 'waveform'. Modes: 'combined', 'separate'. Default: disabled")
+    parser.add_argument('--compression-level', type=int,
+                        help="Compression level: 0-6 for WavPack, 0-12 for FLAC. Default: 0")
+    parser.add_argument('--skip-existing', action='store_true',
+                        help="Skip processing if output file exists. Default: False (overwrites)")
+    parser.add_argument('--parallel', type=int,
+                        help="Number of parallel jobs for directory processing. Default: 2")
+    parser.add_argument('--log', help="File to save analysis results (e.g., 'log.txt'). Default: None")
+    parser.add_argument('--debug', action='store_true',
+                        help="Enable detailed debug logging. Default: False")
+    parser.add_argument('path', help="Path to a .dsf file or directory containing .dsf files")
+
     args = parser.parse_args()
 
     if args.debug:
@@ -363,7 +481,7 @@ def main():
             logger.error(f"Invalid compression level for {CONFIG['OUTPUT_FORMAT']}")
             sys.exit(1)
     if args.skip_existing: CONFIG['SKIP_EXISTING'] = True
-    if args.parallel: CONFIG['PARALLEL_JOBS'] = args.parallel
+    if args.parallel: CONFIG['PARALLEL_JOBS'] = max(1, args.parallel)  # Ensure at least 1 worker
     log_file = args.log
 
     for cmd in ['ffmpeg', 'ffprobe']:
@@ -378,7 +496,6 @@ def main():
     start_time = time.time()
     success = True
 
-    # Configurar manipuladores de sinais
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
 
@@ -431,36 +548,28 @@ def main():
                 logger.info(f"Processing directory: {path}")
                 volume = calculate_auto_volume(files, "", log_file)
                 if volume:
-                    with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                        results = executor.map(lambda f: process_file(f, os.path.join(Path(f).parent, OUTPUT_DIRS[args.format]), volume, log_file), files)
-                        success &= all(results)
-            elif subdirs:
+                    success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume, log_file)
+            if subdirs:  # Process subdirectories sequentially to respect headroom per subdir
                 logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     volume = calculate_auto_volume(subdir_files, str(subdir), log_file)
                     if volume:
-                        with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                            results = executor.map(lambda f: process_file(f, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume, log_file), subdir_files)
-                            success &= all(results)
-            else:
+                        success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume, log_file)
+            if not files and not subdirs:
                 logger.error(f"No .dsf files found in {path} or its subdirectories")
                 success = False
 
         else:
             if files:
                 logger.info(f"Processing directory: {path}")
-                with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                    results = executor.map(lambda f: process_file(f, os.path.join(Path(f).parent, OUTPUT_DIRS[args.format]), args.volume, log_file), files)
-                    success &= all(results)
-            elif subdirs:
+                success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), args.volume, log_file)
+            if subdirs:  # Process subdirectories sequentially
                 logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
-                    with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
-                        results = executor.map(lambda f: process_file(f, os.path.join(subdir, OUTPUT_DIRS[args.format]), args.volume, log_file), subdir_files)
-                        success &= all(results)
-            else:
+                    success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), args.volume, log_file)
+            if not files and not subdirs:
                 logger.error(f"No .dsf files found in {path} or its subdirectories")
                 success = False
     else:
@@ -478,10 +587,15 @@ def main():
             f.write(f"{'Process completed successfully!' if success else 'Process completed with errors!'}\n")
             f.write(f"Elapsed time: {elapsed_time} seconds\n")
 
-    # Limpeza final de arquivos temporários
     for temp_file in TEMP_FILES.values():
         if os.path.exists(temp_file):
             os.remove(temp_file)
+    
+    # Restaurar o estado original do terminal ao final
+    if ORIGINAL_TERMINAL_STATE is not None and sys.stdin.isatty():
+        sys.stdout.flush()
+        sys.stderr.flush()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, ORIGINAL_TERMINAL_STATE)
 
 if __name__ == "__main__":
     main()
