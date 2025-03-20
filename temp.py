@@ -50,6 +50,7 @@ CONFIG = {
     'VISUALIZATION_SIZE': '1920x1080',
     'SPECTROGRAM_MODE': 'combined',
     'HEADROOM_LIMIT': -0.5,
+    'ADDITION': '0dB',  # Novo parâmetro padrão para acréscimo
 }
 
 # Diretórios de saída por formato
@@ -79,6 +80,11 @@ def validate_resolution(resolution: str) -> bool:
 
 def validate_volume(volume: str) -> bool:
     return bool(re.match(r'^[-+]?[0-9]*\.?[0-9]+dB$', volume))
+
+def add_db(value_db: str, addition_db: str) -> str:
+    value = float(value_db.replace('dB', '')) if value_db != 'N/A' else 0
+    addition = float(addition_db.replace('dB', '')) if addition_db else 0
+    return f"{(value + addition):.1f}dB"
 
 def analyze_peaks(file: str, peak_log: str, log_type: str) -> Optional[float]:
     _, stderr, rc = run_command(['ffmpeg', '-i', file, '-af', 'volumedetect', '-f', 'null', '-'])
@@ -146,12 +152,15 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
         adjustment = CONFIG['HEADROOM_LIMIT'] - highest_volume
         logger.info(f"Highest adjusted volume ({highest_volume:.1f} dB) exceeds limit ({CONFIG['HEADROOM_LIMIT']} dB). Applying uniform adjustment of {adjustment:.1f} dB")
         for entry in volume_adjustments:
-            final_volume = f"{(entry['y'] + adjustment):.1f}dB"
+            base_volume = f"{(entry['y'] + adjustment):.1f}dB"
+            final_volume = add_db(base_volume, CONFIG['ADDITION'])
             final_volumes.append((entry['file'], final_volume))
     else:
         logger.info(f"No adjusted volumes exceed {CONFIG['HEADROOM_LIMIT']} dB. Using individual y values as volume adjustments")
         for entry in volume_adjustments:
-            final_volumes.append((entry['file'], f"{entry['y']:.1f}dB"))
+            base_volume = f"{entry['y']:.1f}dB"
+            final_volume = add_db(base_volume, CONFIG['ADDITION'])
+            final_volumes.append((entry['file'], final_volume))
 
     if log_file:
         with open(log_file, 'a') as f:
@@ -161,6 +170,8 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
                 f.write(f"Applied uniform adjustment of {adjustment:.1f} dB to keep highest volume at {CONFIG['HEADROOM_LIMIT']} dB\n")
             else:
                 f.write(f"Used individual y values as no volumes exceed {CONFIG['HEADROOM_LIMIT']} dB\n")
+            if CONFIG['ADDITION'] != '0dB':
+                f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
 
     return final_volumes, volume_adjustments
 
@@ -325,7 +336,6 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
     logger.info(f"{'File':<40} {'y (dB) ffmpeg auto-tuning':<25} {'WAV Max Volume (dB)':<20} {'Applied Volume (dB)':<20}")
     logger.info("-" * 105)
 
-    # Combina todos os volume_maps em um único dicionário para busca rápida
     volume_dict = {}
     for v_map in volume_maps:
         volume_dict.update({file: vol for file, vol in v_map})
@@ -334,6 +344,9 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
         applied_volume = volume_dict.get(entry['file'], "N/A")
         logger.info(f"{entry['file'][:38]:<40} {entry['y']:<25.1f} {entry['wav_max_volume']:<20.1f} {applied_volume:<20}")
     logger.info("-" * 105)
+
+    if CONFIG['ADDITION'] != '0dB':
+        logger.info(f"Applied additional volume adjustment: {CONFIG['ADDITION']}")
 
     if log_file:
         with open(log_file, 'a') as f:
@@ -344,6 +357,8 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
                 applied_volume = volume_dict.get(entry['file'], "N/A")
                 f.write(f"{entry['file'][:38]:<40} {entry['y']:<25.1f} {entry['wav_max_volume']:<20.1f} {applied_volume:<20}\n")
             f.write("-" * 105 + "\n")
+            if CONFIG['ADDITION'] != '0dB':
+                f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -361,6 +376,7 @@ def main():
     parser.add_argument('--loudnorm-TP', help="True peak limit in dBTP. Default: -1")
     parser.add_argument('--loudnorm-LRA', help="Loudness range in LU. Default: 20")
     parser.add_argument('--volume', help="Volume adjustment: fixed value (e.g., '2.5dB'), 'auto', or 'analysis'. Default: None")
+    parser.add_argument('--addition', help="Additional volume adjustment (e.g., '1dB') to apply after auto calculation", default='0dB')
     parser.add_argument('--headroom-limit', type=float, help="Maximum allowed peak volume in dB. Default: -0.5")
     parser.add_argument('--resampler', help="Resampler engine (e.g., soxr). Default: soxr")
     parser.add_argument('--precision', type=int, help="Resampler precision (e.g., 20-28). Default: 28")
@@ -384,6 +400,11 @@ def main():
             logger.error("Volume must be 'auto', 'analysis', or in format 'XdB' (e.g., '3dB', '-2.5dB')")
             sys.exit(1)
         CONFIG['VOLUME'] = args.volume
+
+    if args.addition and not validate_volume(args.addition):
+        logger.error("Addition must be in format 'XdB' (e.g., '1dB', '-2.5dB')")
+        sys.exit(1)
+    CONFIG['ADDITION'] = args.addition
 
     if args.codec: CONFIG['ACODEC'] = args.codec
     if args.sample_rate: CONFIG['AR'] = str(args.sample_rate)
@@ -427,7 +448,7 @@ def main():
     start_time = time.time()
     success = True
     all_volume_data = []
-    all_volume_maps = []  # Lista para armazenar volume_maps de cada subdiretório
+    all_volume_maps = []
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
