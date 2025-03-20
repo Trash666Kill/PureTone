@@ -50,7 +50,7 @@ CONFIG = {
     'VISUALIZATION_SIZE': '1920x1080',
     'SPECTROGRAM_MODE': 'combined',
     'HEADROOM_LIMIT': -0.5,
-    'ADDITION': '0dB',  # Novo parâmetro padrão para acréscimo
+    'ADDITION': '0dB',
 }
 
 # Diretórios de saída por formato
@@ -361,33 +361,104 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
                 f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
 
 def main():
+    # Descrição detalhada para o --help
+    description = """
+PureTone - Conversor de DSD para Áudio de Alta Qualidade
+
+Descrição:
+----------
+PureTone é um script Python que converte arquivos DSD (.dsf) para formatos de áudio de alta qualidade (WAV, WavPack, FLAC), com opções avançadas de processamento de áudio, incluindo normalização de volume, resampling e visualização (espectrogramas ou formas de onda). Ele suporta processamento paralelo para maior eficiência e inclui logs detalhados para depuração.
+
+Fluxo Detalhado de Funcionamento:
+---------------------------------
+1. **Validação de Dependências**: Verifica se ffmpeg e ffprobe estão instalados.
+2. **Análise de Caminho**: Aceita um arquivo .dsf ou diretório como entrada. Para diretórios, processa recursivamente todos os arquivos .dsf.
+3. **Análise de Volume (se --volume auto)**:
+   - Cria arquivos WAV temporários para análise.
+   - Calcula volumes máximos (DSD e WAV) usando ffmpeg.
+   - Determina ajustes de volume (y) para evitar clipping, respeitando o limite de headroom (--headroom-limit).
+   - Aplica acréscimo adicional (--addition) ao volume ajustado, se especificado.
+4. **Processamento de Arquivos**:
+   - Converte cada arquivo para WAV intermediário com resampling e ajustes de volume.
+   - Converte WAV intermediário para o formato final (WAV, WavPack ou FLAC).
+   - Gera visualizações (espectrogramas ou formas de onda), se habilitado.
+   - Analisa picos finais e registra no log.
+5. **Saída e Limpeza**:
+   - Salva arquivos convertidos em subdiretórios (wv para WAV, wvpk para WavPack, flac para FLAC).
+   - Remove arquivos temporários.
+   - Gera um resumo de ajustes de volume (se --volume auto) e registra o tempo de execução.
+
+Valores Padrão:
+---------------
+- Formato de saída (--format): wav
+- Codec de áudio (--codec): pcm_s24le
+- Taxa de amostragem (--sample-rate): 176400 Hz
+- Mapeamento de metadados (--map-metadata): 0
+- Alvo de loudness integrado (--loudnorm-I): -14 LUFS
+- Pico verdadeiro (--loudnorm-TP): -1 dBTP
+- Faixa de loudness (--loudnorm-LRA): 20 LU
+- Ajuste de volume (--volume): None (usa loudnorm por padrão)
+- Acréscimo adicional (--addition): 0dB
+- Limite de headroom (--headroom-limit): -0.5 dB
+- Resampler (--resampler): soxr
+- Precisão do resampler (--precision): 28
+- Modo Chebyshev (--cheby): 1
+- Visualização (--spectrogram): Desabilitado
+- Nível de compressão (--compression-level): 0
+- Pular existentes (--skip-existing): False
+- Número de tarefas paralelas (--parallel): 2
+- Arquivo de log (--log): None
+- Modo depuração (--debug): False
+
+Parâmetros e Uso:
+----------------
+Abaixo estão todos os parâmetros disponíveis, suas descrições e exemplos práticos.
+
+Exemplos Práticos:
+-----------------
+1. Converter um único arquivo DSD para WAV com loudness normalizado:
+   ./puretone.py /path/to/file.dsf
+
+2. Converter todos os arquivos DSD em um diretório para WavPack com ajuste automático de volume e acréscimo de 1dB:
+   ./puretone.py --format wavpack --volume auto --addition 1dB --parallel 4 /path/to/directory
+
+3. Converter arquivos com visualização de espectrograma e salvar logs:
+   ./puretone.py --format flac --spectrogram 1920x1080 spectrogram combined --log output.log /path/to/directory
+
+4. Processar com ajuste fixo de volume e pular arquivos existentes:
+   ./puretone.py --volume 2.5dB --skip-existing /path/to/file.dsf
+
+5. Ativar modo depuração para logs detalhados:
+   ./puretone.py --debug /path/to/directory
+"""
+
     parser = argparse.ArgumentParser(
-        description="PureTone - DSD to High-Quality Audio Converter",
+        description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False
     )
 
-    parser.add_argument('-h', '--help', action='help', help="Show this help message and exit.")
-    parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav', help="Output format: 'wav', 'wavpack', or 'flac'. Default: wav")
-    parser.add_argument('--codec', help="Audio codec for WAV output (e.g., pcm_s32le). Default: pcm_s24le")
-    parser.add_argument('--sample-rate', type=int, help="Sample rate in Hz (e.g., 88200). Default: 176400")
-    parser.add_argument('--map-metadata', help="Metadata mapping (e.g., 0 to keep). Default: 0")
-    parser.add_argument('--loudnorm-I', help="Integrated loudness target in LUFS. Default: -14")
-    parser.add_argument('--loudnorm-TP', help="True peak limit in dBTP. Default: -1")
-    parser.add_argument('--loudnorm-LRA', help="Loudness range in LU. Default: 20")
-    parser.add_argument('--volume', help="Volume adjustment: fixed value (e.g., '2.5dB'), 'auto', or 'analysis'. Default: None")
-    parser.add_argument('--addition', help="Additional volume adjustment (e.g., '1dB') to apply after auto calculation", default='0dB')
-    parser.add_argument('--headroom-limit', type=float, help="Maximum allowed peak volume in dB. Default: -0.5")
-    parser.add_argument('--resampler', help="Resampler engine (e.g., soxr). Default: soxr")
-    parser.add_argument('--precision', type=int, help="Resampler precision (e.g., 20-28). Default: 28")
-    parser.add_argument('--cheby', choices=['0', '1'], help="Enable Chebyshev mode for SoX resampler. Default: 1")
-    parser.add_argument('--spectrogram', nargs='*', help="Enable visualization: '<width>x<height> [type [mode]]'. Default: disabled")
-    parser.add_argument('--compression-level', type=int, help="Compression level: 0-6 for WavPack, 0-12 for FLAC. Default: 0")
-    parser.add_argument('--skip-existing', action='store_true', help="Skip if output exists. Default: False")
-    parser.add_argument('--parallel', type=int, help="Number of parallel jobs. Default: 2")
-    parser.add_argument('--log', help="File to save analysis results. Default: None")
-    parser.add_argument('--debug', action='store_true', help="Enable debug logging. Default: False")
-    parser.add_argument('path', help="Path to a .dsf file or directory")
+    parser.add_argument('-h', '--help', action='help', help="Mostra esta mensagem de ajuda e sai.")
+    parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav', help="Formato de saída: 'wav', 'wavpack' ou 'flac'. Padrão: wav")
+    parser.add_argument('--codec', help="Codec de áudio para saída WAV (ex.: pcm_s32le). Padrão: pcm_s24le")
+    parser.add_argument('--sample-rate', type=int, help="Taxa de amostragem em Hz (ex.: 88200). Padrão: 176400")
+    parser.add_argument('--map-metadata', help="Mapeamento de metadados (ex.: 0 para manter). Padrão: 0")
+    parser.add_argument('--loudnorm-I', help="Alvo de loudness integrado em LUFS. Padrão: -14")
+    parser.add_argument('--loudnorm-TP', help="Limite de pico verdadeiro em dBTP. Padrão: -1")
+    parser.add_argument('--loudnorm-LRA', help="Faixa de loudness em LU. Padrão: 20")
+    parser.add_argument('--volume', help="Ajuste de volume: valor fixo (ex.: '2.5dB'), 'auto' ou 'analysis'. Padrão: None")
+    parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB') a ser aplicado após cálculo automático. Padrão: 0dB")
+    parser.add_argument('--headroom-limit', type=float, help="Volume máximo permitido em dB. Padrão: -0.5")
+    parser.add_argument('--resampler', help="Motor de resampling (ex.: soxr). Padrão: soxr")
+    parser.add_argument('--precision', type=int, help="Precisão do resampler (ex.: 20-28). Padrão: 28")
+    parser.add_argument('--cheby', choices=['0', '1'], help="Ativa modo Chebyshev para resampler SoX. Padrão: 1")
+    parser.add_argument('--spectrogram', nargs='*', help="Ativa visualização: '<width>x<height> [type [mode]]'. Padrão: desabilitado")
+    parser.add_argument('--compression-level', type=int, help="Nível de compressão: 0-6 para WavPack, 0-12 para FLAC. Padrão: 0")
+    parser.add_argument('--skip-existing', action='store_true', help="Pula se o arquivo de saída já existe. Padrão: False")
+    parser.add_argument('--parallel', type=int, help="Número de tarefas paralelas. Padrão: 2")
+    parser.add_argument('--log', help="Arquivo para salvar resultados da análise. Padrão: None")
+    parser.add_argument('--debug', action='store_true', help="Ativa logs de depuração. Padrão: False")
+    parser.add_argument('path', help="Caminho para um arquivo .dsf ou diretório")
 
     args = parser.parse_args()
 
@@ -397,12 +468,12 @@ def main():
     CONFIG['OUTPUT_FORMAT'] = args.format
     if args.volume:
         if args.volume not in ('auto', 'analysis') and not validate_volume(args.volume):
-            logger.error("Volume must be 'auto', 'analysis', or in format 'XdB' (e.g., '3dB', '-2.5dB')")
+            logger.error("Volume deve ser 'auto', 'analysis', ou no formato 'XdB' (ex.: '3dB', '-2.5dB')")
             sys.exit(1)
         CONFIG['VOLUME'] = args.volume
 
     if args.addition and not validate_volume(args.addition):
-        logger.error("Addition must be in format 'XdB' (e.g., '1dB', '-2.5dB')")
+        logger.error("Addition deve estar no formato 'XdB' (ex.: '1dB', '-2.5dB')")
         sys.exit(1)
     CONFIG['ADDITION'] = args.addition
 
@@ -430,7 +501,7 @@ def main():
         elif CONFIG['OUTPUT_FORMAT'] == 'flac' and 0 <= args.compression_level <= 12:
             CONFIG['FLAC_COMPRESSION'] = str(args.compression_level)
         else:
-            logger.error(f"Invalid compression level for {CONFIG['OUTPUT_FORMAT']}")
+            logger.error(f"Nível de compressão inválido para {CONFIG['OUTPUT_FORMAT']}")
             sys.exit(1)
     if args.skip_existing: CONFIG['SKIP_EXISTING'] = True
     if args.parallel: CONFIG['PARALLEL_JOBS'] = max(1, args.parallel)
@@ -438,7 +509,7 @@ def main():
 
     for cmd in ['ffmpeg', 'ffprobe']:
         if shutil.which(cmd) is None:
-            logger.error(f"{cmd} not found. Please install it.")
+            logger.error(f"{cmd} não encontrado. Por favor, instale-o.")
             sys.exit(1)
 
     for temp_file in TEMP_FILES.values():
@@ -472,13 +543,13 @@ def main():
 
         if args.volume == 'auto':
             if files:
-                logger.info(f"Processing directory: {path}")
+                logger.info(f"Processando diretório: {path}")
                 volume_map, volume_data = calculate_volume_adjustment(files, "", log_file)
                 all_volume_data.extend(volume_data)
                 all_volume_maps.append(volume_map)
                 success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if subdirs:
-                logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
+                logger.info(f"Processando subdiretórios em {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     volume_map, volume_data = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
@@ -486,38 +557,38 @@ def main():
                     all_volume_maps.append(volume_map)
                     success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if not files and not subdirs:
-                logger.error(f"No .dsf files found in {path} or its subdirectories")
+                logger.error(f"Nenhum arquivo .dsf encontrado em {path} ou seus subdiretórios")
                 success = False
         else:
             if files:
-                logger.info(f"Processing directory: {path}")
+                logger.info(f"Processando diretório: {path}")
                 success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), [(f, args.volume) for f in files], log_file)
             if subdirs:
-                logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
+                logger.info(f"Processando subdiretórios em {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), [(f, args.volume) for f in subdir_files], log_file)
             if not files and not subdirs:
-                logger.error(f"No .dsf files found in {path} or its subdirectories")
+                logger.error(f"Nenhum arquivo .dsf encontrado em {path} ou seus subdiretórios")
                 success = False
     else:
-        logger.error(f"Invalid path: {args.path}")
+        logger.error(f"Caminho inválido: {args.path}")
         sys.exit(1)
 
     elapsed_time = int(time.time() - start_time)
     if success:
-        logger.info("Process completed successfully!")
+        logger.info("Processo concluído com sucesso!")
     else:
-        logger.error("Process completed with errors!")
-    logger.info(f"Elapsed time: {elapsed_time} seconds")
+        logger.error("Processo concluído com erros!")
+    logger.info(f"Tempo decorrido: {elapsed_time} segundos")
 
     if all_volume_data and args.volume == 'auto':
         print_volume_summary(all_volume_data, all_volume_maps, log_file)
 
     if log_file:
         with open(log_file, 'a') as f:
-            f.write(f"{'Process completed successfully!' if success else 'Process completed with errors!'}\n")
-            f.write(f"Elapsed time: {elapsed_time} seconds\n")
+            f.write(f"{'Processo concluído com sucesso!' if success else 'Processo concluído com erros!'}\n")
+            f.write(f"Tempo decorrido: {elapsed_time} segundos\n")
 
     for temp_file in TEMP_FILES.values():
         if os.path.exists(temp_file):
