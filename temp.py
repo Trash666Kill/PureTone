@@ -339,17 +339,37 @@ def process_files_in_parallel(files: List[str], output_dir: str, volume_map: Lis
 
 def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[str, str]]], log_file: Optional[str] = None):
     logger.info("\n=== Volume Adjustment Summary ===")
-    logger.info(f"{'File':<40} {'y (dB) ffmpeg auto-tuning':<25} {'WAV Max Volume (dB)':<20} {'Applied Volume (dB)':<20}")
-    logger.info("-" * 105)
+    # Definindo larguras fixas para cada coluna
+    col_widths = [40, 15, 20, 20, 20]
+    # Centralizando os títulos
+    logger.info(f"{'File':<40} {'y (dB) ffmpeg':^15} {'WAV Max Volume (dB)':^20} {'Applied Volume (dB)':^20} {'Output Max Volume (dB)':^20}")
+    logger.info("-" * sum(col_widths))
 
     volume_dict = {}
     for v_map in volume_maps:
         volume_dict.update({file: vol for file, vol in v_map})
 
+    # Ler os valores de max volume dos arquivos de saída do log de picos
+    output_max_volumes = {}
+    if os.path.exists(TEMP_FILES['PEAK_LOG']):
+        with open(TEMP_FILES['PEAK_LOG'], 'r') as f:
+            for line in f:
+                if ":Output:" in line:
+                    parts = line.strip().split(':')
+                    if len(parts) >= 3:
+                        output_file = parts[0]
+                        max_volume = parts[2]  # max_volume está na terceira posição
+                        output_max_volumes[output_file] = max_volume
+
     for entry in volume_data:
         applied_volume = volume_dict.get(entry['file'], "N/A")
-        logger.info(f"{entry['file'][:38]:<40} {entry['y']:<25.1f} {entry['wav_max_volume']:<20.1f} {applied_volume:<20}")
-    logger.info("-" * 105)
+        # Determinar o arquivo de saída correspondente
+        base_name = Path(entry['file']).stem
+        output_dir = os.path.join(Path(entry['file']).parent, OUTPUT_DIRS[CONFIG['OUTPUT_FORMAT']])
+        output_file = normalize_path(os.path.join(output_dir, f"{base_name}.{FORMAT_EXTENSIONS[CONFIG['OUTPUT_FORMAT']]}"))
+        output_max_volume = output_max_volumes.get(output_file, "N/A")
+        logger.info(f"{entry['file'][:38]:<40} {entry['y']:^15.1f} {entry['wav_max_volume']:^20.1f} {applied_volume:^20} {output_max_volume:^20}")
+    logger.info("-" * sum(col_widths))
 
     if CONFIG['ADDITION'] != '0dB':
         logger.info(f"Applied additional volume adjustment: {CONFIG['ADDITION']}")
@@ -357,12 +377,16 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
     if log_file:
         with open(log_file, 'a') as f:
             f.write("\n=== Volume Adjustment Summary ===\n")
-            f.write(f"{'File':<40} {'y (dB) ffmpeg auto-tuning':<25} {'WAV Max Volume (dB)':<20} {'Applied Volume (dB)':<20}\n")
-            f.write("-" * 105 + "\n")
+            f.write(f"{'File':<40} {'y (dB) ffmpeg':^15} {'WAV Max Volume (dB)':^20} {'Applied Volume (dB)':^20} {'Output Max Volume (dB)':^20}\n")
+            f.write("-" * sum(col_widths) + "\n")
             for entry in volume_data:
                 applied_volume = volume_dict.get(entry['file'], "N/A")
-                f.write(f"{entry['file'][:38]:<40} {entry['y']:<25.1f} {entry['wav_max_volume']:<20.1f} {applied_volume:<20}\n")
-            f.write("-" * 105 + "\n")
+                base_name = Path(entry['file']).stem
+                output_dir = os.path.join(Path(entry['file']).parent, OUTPUT_DIRS[CONFIG['OUTPUT_FORMAT']])
+                output_file = normalize_path(os.path.join(output_dir, f"{base_name}.{FORMAT_EXTENSIONS[CONFIG['OUTPUT_FORMAT']]}"))
+                output_max_volume = output_max_volumes.get(output_file, "N/A")
+                f.write(f"{entry['file'][:38]:<40} {entry['y']:^15.1f} {entry['wav_max_volume']:^20.1f} {applied_volume:^20} {output_max_volume:^20}\n")
+            f.write("-" * sum(col_widths) + "\n")
             if CONFIG['ADDITION'] != '0dB':
                 f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
 
