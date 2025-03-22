@@ -154,17 +154,47 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
     max_volumes = [entry['wav_max_volume'] + entry['y'] for entry in volume_adjustments]
     highest_volume = max(max_volumes)
 
+    # Variáveis para rastrear o ajuste de 2dB e faixas sem margem
+    applied_2db = False
+    insufficient_headroom_files = []
+
+    # Verificar se podemos adicionar 2dB (apenas se --volume auto e sem --addition)
+    if CONFIG['VOLUME'] == 'auto' and CONFIG['ADDITION'] == '0dB':
+        # Verificar se todas as faixas têm margem para +2dB
+        all_have_margin = True
+        for entry in volume_adjustments:
+            adjusted_volume = entry['wav_max_volume'] + 2  # Adicionar 2dB ao WAV Max Volume
+            if adjusted_volume > CONFIG['HEADROOM_LIMIT']:
+                all_have_margin = False
+                insufficient_headroom_files.append((entry['file'], entry['wav_max_volume']))
+                break
+
+        if all_have_margin and volume_adjustments:
+            logger.info("All tracks have sufficient headroom. Applying 2dB increase to all tracks.")
+            applied_2db = True
+        else:
+            logger.info("Not all tracks have sufficient headroom for 2dB increase. Following standard flow.")
+
+    # Calcular os volumes finais
     if highest_volume > CONFIG['HEADROOM_LIMIT']:
         adjustment = CONFIG['HEADROOM_LIMIT'] - highest_volume
         logger.info(f"Highest adjusted volume ({highest_volume:.1f} dB) exceeds limit ({CONFIG['HEADROOM_LIMIT']} dB). Applying uniform adjustment of {adjustment:.1f} dB")
         for entry in volume_adjustments:
             base_volume = f"{(entry['y'] + adjustment):.1f}dB"
+            # Adicionar 2dB ao base_volume se aplicável
+            if applied_2db:
+                base_volume_value = float(base_volume.replace('dB', '')) + 2
+                base_volume = f"{base_volume_value:.1f}dB"
             final_volume = add_db(base_volume, CONFIG['ADDITION'])
             final_volumes.append((entry['file'], final_volume))
     else:
         logger.info(f"No adjusted volumes exceed {CONFIG['HEADROOM_LIMIT']} dB. Using individual y values as volume adjustments")
         for entry in volume_adjustments:
             base_volume = f"{entry['y']:.1f}dB"
+            # Adicionar 2dB ao base_volume se aplicável
+            if applied_2db:
+                base_volume_value = float(base_volume.replace('dB', '')) + 2
+                base_volume = f"{base_volume_value:.1f}dB"
             final_volume = add_db(base_volume, CONFIG['ADDITION'])
             final_volumes.append((entry['file'], final_volume))
 
@@ -179,7 +209,7 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
             if CONFIG['ADDITION'] != '0dB':
                 f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
 
-    return final_volumes, volume_adjustments
+    return final_volumes, volume_adjustments, applied_2db, insufficient_headroom_files
 
 def process_file(input_file: str, output_dir: str, volume: str = None, log_file: Optional[str] = None) -> bool:
     logger.debug(f"Processing file: {input_file}")
@@ -339,9 +369,7 @@ def process_files_in_parallel(files: List[str], output_dir: str, volume_map: Lis
 
 def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[str, str]]], log_file: Optional[str] = None):
     logger.info("\n=== Volume Adjustment Summary ===")
-    # Definindo larguras fixas para cada coluna
     col_widths = [40, 15, 20, 20, 20]
-    # Centralizando os títulos
     logger.info(f"{'File':<40} {'y (dB) ffmpeg':^15} {'WAV Max Volume (dB)':^20} {'Applied Volume (dB)':^20} {'Output Max Volume (dB)':^20}")
     logger.info("-" * sum(col_widths))
 
@@ -349,7 +377,6 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
     for v_map in volume_maps:
         volume_dict.update({file: vol for file, vol in v_map})
 
-    # Ler os valores de max volume dos arquivos de saída do log de picos
     output_max_volumes = {}
     if os.path.exists(TEMP_FILES['PEAK_LOG']):
         with open(TEMP_FILES['PEAK_LOG'], 'r') as f:
@@ -358,12 +385,11 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
                     parts = line.strip().split(':')
                     if len(parts) >= 3:
                         output_file = parts[0]
-                        max_volume = parts[2]  # max_volume está na terceira posição
+                        max_volume = parts[2]
                         output_max_volumes[output_file] = max_volume
 
     for entry in volume_data:
         applied_volume = volume_dict.get(entry['file'], "N/A")
-        # Determinar o arquivo de saída correspondente
         base_name = Path(entry['file']).stem
         output_dir = os.path.join(Path(entry['file']).parent, OUTPUT_DIRS[CONFIG['OUTPUT_FORMAT']])
         output_file = normalize_path(os.path.join(output_dir, f"{base_name}.{FORMAT_EXTENSIONS[CONFIG['OUTPUT_FORMAT']]}"))
@@ -553,6 +579,8 @@ Exemplos Práticos:
     success = True
     all_volume_data = []
     all_volume_maps = []
+    all_applied_2db = []
+    all_insufficient_headroom_files = []
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
@@ -560,9 +588,11 @@ Exemplos Práticos:
     if path.is_file() and path.suffix == '.dsf':
         output_dir = os.path.join(path.parent, OUTPUT_DIRS[args.format])
         if args.volume == 'auto':
-            volume_map, volume_data = calculate_volume_adjustment([str(path)], "", log_file)
+            volume_map, volume_data, applied_2db, insufficient_headroom_files = calculate_volume_adjustment([str(path)], "", log_file)
             all_volume_data.extend(volume_data)
             all_volume_maps.append(volume_map)
+            all_applied_2db.append(applied_2db)
+            all_insufficient_headroom_files.append(insufficient_headroom_files)
             if volume_map:
                 success &= process_file(str(path), output_dir, volume_map[0][1], log_file)
             else:
@@ -577,17 +607,21 @@ Exemplos Práticos:
         if args.volume == 'auto':
             if files:
                 logger.info(f"Processando diretório: {path}")
-                volume_map, volume_data = calculate_volume_adjustment(files, "", log_file)
+                volume_map, volume_data, applied_2db, insufficient_headroom_files = calculate_volume_adjustment(files, "", log_file)
                 all_volume_data.extend(volume_data)
                 all_volume_maps.append(volume_map)
+                all_applied_2db.append(applied_2db)
+                all_insufficient_headroom_files.append(insufficient_headroom_files)
                 success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if subdirs:
                 logger.info(f"Processando subdiretórios em {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
-                    volume_map, volume_data = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
+                    volume_map, volume_data, applied_2db, insufficient_headroom_files = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
                     all_volume_data.extend(volume_data)
                     all_volume_maps.append(volume_map)
+                    all_applied_2db.append(applied_2db)
+                    all_insufficient_headroom_files.append(insufficient_headroom_files)
                     success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if not files and not subdirs:
                 logger.error(f"Nenhum arquivo .dsf encontrado em {path} ou seus subdiretórios")
@@ -617,6 +651,28 @@ Exemplos Práticos:
 
     if all_volume_data and args.volume == 'auto':
         print_volume_summary(all_volume_data, all_volume_maps, log_file)
+
+    # Adicionar logs relacionados ao ajuste de 2dB
+    for applied_2db, insufficient_headroom_files in zip(all_applied_2db, all_insufficient_headroom_files):
+        if CONFIG['VOLUME'] == 'auto':
+            if CONFIG['ADDITION'] != '0dB':
+                logger.info(f"Skipped 2dB increase: --addition parameter specified (value: {CONFIG['ADDITION']}).")
+                if log_file:
+                    with open(log_file, 'a') as f:
+                        f.write(f"Skipped 2dB increase: --addition parameter specified (value: {CONFIG['ADDITION']}).\n")
+            elif applied_2db:
+                logger.info("Applied 2dB increase to all tracks: all had sufficient headroom.")
+                if log_file:
+                    with open(log_file, 'a') as f:
+                        f.write("Applied 2dB increase to all tracks: all had sufficient headroom.\n")
+            elif insufficient_headroom_files:
+                msg = "Could not apply 2dB increase. Insufficient headroom in: " + ", ".join(
+                    [f"{file} (WAV Max Volume: {volume:.1f}dB)" for file, volume in insufficient_headroom_files]
+                )
+                logger.info(msg)
+                if log_file:
+                    with open(log_file, 'a') as f:
+                        f.write(msg + "\n")
 
     if log_file:
         with open(log_file, 'a') as f:
