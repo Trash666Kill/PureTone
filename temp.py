@@ -124,7 +124,7 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
         temp_wav_files.append(temp_wav)
 
         cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR,
-               '-map_metadata', CONFIG.MAP_METADATA, '-af', f"aresample=resampler={CONFIG.RESAMPLER}:precision={CONFIG.PRECISION}:cheby={CONFIG.CHEBY}", temp_wav, '-y']
+               '-af', f"aresample=resampler={CONFIG.RESAMPLER}:precision={CONFIG.PRECISION}:cheby={CONFIG.CHEBY}", temp_wav, '-y']
         _, stderr, rc = run_command(cmd)
         if rc != 0 or not os.path.exists(temp_wav):
             logger.error(f"Failed to create temporary WAV for {input_file}: {stderr}")
@@ -157,19 +157,10 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
     highest_volume = max(max_volumes)
 
     applied_increase = False
-    insufficient_headroom_files = []
-
     volume_increase_db = float(CONFIG.VOLUME_INCREASE.replace('dB', ''))
 
     if CONFIG.VOLUME == 'auto' and CONFIG.ADDITION == '0dB':
-        all_have_margin = True
-        for entry in volume_adjustments:
-            adjusted_volume = entry['wav_max_volume'] + volume_increase_db
-            if adjusted_volume > CONFIG.HEADROOM_LIMIT:
-                all_have_margin = False
-                insufficient_headroom_files.append((entry['file'], entry['wav_max_volume']))
-                break
-
+        all_have_margin = all(entry['wav_max_volume'] + volume_increase_db <= CONFIG.HEADROOM_LIMIT for entry in volume_adjustments)
         if all_have_margin and volume_adjustments:
             logger.info(f"All tracks have sufficient headroom. Applying {volume_increase_db}dB increase to all tracks.")
             applied_increase = True
@@ -207,7 +198,7 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
             if CONFIG.ADDITION != '0dB':
                 f.write(f"Applied additional volume adjustment: {CONFIG.ADDITION}\n")
 
-    return final_volumes, volume_adjustments, applied_increase, insufficient_headroom_files
+    return final_volumes, volume_adjustments
 
 def process_file(input_file: str, output_dir: str, volume: str = None, log_file: Optional[str] = None) -> bool:
     logger.debug(f"Processing file: {input_file}")
@@ -330,6 +321,22 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
             logger.error(f"COMMENT not found in {output_file} after application:\n{stdout}\n{stderr}")
             return False
 
+    if CONFIG.ENABLE_VISUALIZATION:
+        vis_file = normalize_path(os.path.join(spectrogram_dir, f"{base_name}.png"))
+        if CONFIG.VISUALIZATION_TYPE == 'waveform':
+            cmd = ['ffmpeg', '-i', output_file, '-filter_complex', f"showwavespic=s={CONFIG.VISUALIZATION_SIZE}", vis_file, '-y']
+        else:
+            cmd = ['ffmpeg', '-i', output_file, '-lavfi', f"showspectrumpic=s={CONFIG.VISUALIZATION_SIZE}:mode={CONFIG.SPECTROGRAM_MODE}", vis_file, '-y']
+        _, stderr, rc = run_command(cmd)
+        if rc != 0:
+            logger.error(f"Error generating {CONFIG.VISUALIZATION_TYPE} for {output_file}. Check {local_log}")
+            with open(local_log, 'a') as f:
+                f.write(stderr + '\n')
+        else:
+            logger.info(f"Generated {CONFIG.VISUALIZATION_TYPE}: {vis_file}")
+
+    return True
+
 def cleanup(signum=None, frame=None):
     elapsed_time = int(time.time() - START_TIME)
     logger.info(f"Script interrupted after {elapsed_time} seconds. Cleaning up temporary files...")
@@ -367,8 +374,9 @@ def process_files_in_parallel(files: List[str], output_dir: str, volume_map: Lis
         for file, volume in volume_map:
             results.append(executor.submit(process_file, file, output_dir, volume, log_file))
         outcomes = [future.result() for future in results]
-    logger.info(f"Completed parallel processing for {len(files)} files")
-    return all(outcomes)
+    success = all(outcomes)
+    logger.info(f"Completed parallel processing for {len(files)} files. Success: {success}")
+    return success
 
 def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[str, str]]], log_file: Optional[str] = None):
     logger.info("\n=== Volume Adjustment Summary ===")
@@ -434,7 +442,6 @@ Valores Padrão:
 - Formato de saída (--format): wav
 - Codec de áudio (--codec): pcm_s24le
 - Taxa de amostragem (--sample-rate): 176400 Hz
-- Mapeamento de metadados (--map-metadata): 0
 - Alvo de loudness integrado (--loudnorm-I): -14 LUFS
 - Pico verdadeiro (--loudnorm-TP): -1 dBTP
 - Faixa de loudness (--loudnorm-LRA): 20 LU
@@ -470,12 +477,13 @@ Exemplos Práticos:
    ./puretone.py --debug /path/to/directory
 """
 
-def main():
     parser = argparse.ArgumentParser(
-        description="PureTone - Conversor de DSD para Áudio de Alta Qualidade",
+        description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False
     )
+
+    parser.add_argument('-h', '--help', action='help', help="Mostra esta mensagem de ajuda e sai.")
     parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav', help="Formato de saída: 'wav', 'wavpack' ou 'flac'. Padrão: wav")
     parser.add_argument('--codec', help="Codec de áudio para saída WAV (ex.: pcm_s32le). Padrão: pcm_s24le")
     parser.add_argument('--sample-rate', type=int, help="Taxa de amostragem em Hz (ex.: 88200). Padrão: 176400")
@@ -483,8 +491,8 @@ def main():
     parser.add_argument('--loudnorm-TP', help="Limite de pico verdadeiro em dBTP. Padrão: -1")
     parser.add_argument('--loudnorm-LRA', help="Faixa de loudness em LU. Padrão: 20")
     parser.add_argument('--volume', help="Ajuste de volume: valor fixo (ex.: '2.5dB'), 'auto' ou 'analysis'. Padrão: None")
-    parser.add_argument('--volume-increase', default='1dB', help="Aumento de volume opcional (ex.: '1dB'). Padrão: 1dB")
-    parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB'). Padrão: 0dB")
+    parser.add_argument('--volume-increase', default='1dB', help="Aumento de volume opcional (ex.: '1dB') a ser aplicado quando --volume auto e todas as faixas têm margem. Padrão: 1dB")
+    parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB') a ser aplicado apenas com --volume auto. Valores negativos não permitidos. Padrão: 0dB")
     parser.add_argument('--headroom-limit', type=float, help="Volume máximo permitido em dB. Padrão: -0.5")
     parser.add_argument('--resampler', help="Motor de resampling (ex.: soxr). Padrão: soxr")
     parser.add_argument('--precision', type=int, help="Precisão do resampler (ex.: 20-28). Padrão: 28")
@@ -553,7 +561,11 @@ def main():
     if args.parallel: CONFIG.PARALLEL_JOBS = max(1, args.parallel)
     log_file = args.log
 
-    for cmd in ['ffmpeg', 'ffprobe']:
+    # Verificar dependências
+    required_commands = ['ffmpeg', 'ffprobe']
+    if CONFIG.OUTPUT_FORMAT == 'flac':
+        required_commands.append('metaflac')
+    for cmd in required_commands:
         if shutil.which(cmd) is None:
             logger.error(f"{cmd} não encontrado. Por favor, instale-o.")
             sys.exit(1)
@@ -566,8 +578,6 @@ def main():
     success = True
     all_volume_data = []
     all_volume_maps = []
-    all_applied_increase = []
-    all_insufficient_headroom_files = []
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
@@ -575,11 +585,9 @@ def main():
     if path.is_file() and path.suffix == '.dsf':
         output_dir = os.path.join(path.parent, OUTPUT_DIRS[args.format])
         if args.volume == 'auto':
-            volume_map, volume_data, applied_increase, insufficient_headroom_files = calculate_volume_adjustment([str(path)], "", log_file)
+            volume_map, volume_data = calculate_volume_adjustment([str(path)], "", log_file)
             all_volume_data.extend(volume_data)
             all_volume_maps.append(volume_map)
-            all_applied_increase.append(applied_increase)
-            all_insufficient_headroom_files.append(insufficient_headroom_files)
             if volume_map:
                 success &= process_file(str(path), output_dir, volume_map[0][1], log_file)
             else:
@@ -594,21 +602,17 @@ def main():
         if args.volume == 'auto':
             if files:
                 logger.info(f"Processando diretório: {path}")
-                volume_map, volume_data, applied_increase, insufficient_headroom_files = calculate_volume_adjustment(files, "", log_file)
+                volume_map, volume_data = calculate_volume_adjustment(files, "", log_file)
                 all_volume_data.extend(volume_data)
                 all_volume_maps.append(volume_map)
-                all_applied_increase.append(applied_increase)
-                all_insufficient_headroom_files.append(insufficient_headroom_files)
                 success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if subdirs:
                 logger.info(f"Processando subdiretórios em {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
-                    volume_map, volume_data, applied_increase, insufficient_headroom_files = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
+                    volume_map, volume_data = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
                     all_volume_data.extend(volume_data)
                     all_volume_maps.append(volume_map)
-                    all_applied_increase.append(applied_increase)
-                    all_insufficient_headroom_files.append(insufficient_headroom_files)
                     success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if not files and not subdirs:
                 logger.error(f"Nenhum arquivo .dsf encontrado em {path} ou seus subdiretórios")
@@ -638,32 +642,6 @@ def main():
 
     if all_volume_data and args.volume == 'auto':
         print_volume_summary(all_volume_data, all_volume_maps, log_file)
-
-    for applied_increase, insufficient_headroom_files in zip(all_applied_increase, all_insufficient_headroom_files):
-        if CONFIG.VOLUME == 'auto':
-            if CONFIG.ADDITION != '0dB':
-                logger.info(f"Skipped {CONFIG.VOLUME_INCREASE} increase: --addition parameter specified (value: {CONFIG.ADDITION}).")
-                if log_file:
-                    with open(log_file, 'a') as f:
-                        f.write(f"Skipped {CONFIG.VOLUME_INCREASE} increase: --addition parameter specified (value: {CONFIG.ADDITION}).\n")
-            elif applied_increase:
-                logger.info(f"Applied {CONFIG.VOLUME_INCREASE} increase to all tracks: all had sufficient headroom.")
-                if log_file:
-                    with open(log_file, 'a') as f:
-                        f.write(f"Applied {CONFIG.VOLUME_INCREASE} increase to all tracks: all had sufficient headroom.\n")
-            elif insufficient_headroom_files:
-                msg = f"Could not apply {CONFIG.VOLUME_INCREASE} increase. Insufficient headroom in: " + ", ".join(
-                    [f"{file} (WAV Max Volume: {volume:.1f}dB)" for file, volume in insufficient_headroom_files]
-                )
-                logger.info(msg)
-                if log_file:
-                    with open(log_file, 'a') as f:
-                        f.write(msg + "\n")
-
-    if log_file:
-        with open(log_file, 'a') as f:
-            f.write(f"{'Processo concluído com sucesso!' if success else 'Processo concluído com erros!'}\n")
-            f.write(f"Tempo decorrido: {elapsed_time} segundos\n")
 
     for temp_file in TEMP_FILES.values():
         if os.path.exists(temp_file):
