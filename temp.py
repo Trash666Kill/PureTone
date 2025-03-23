@@ -32,12 +32,11 @@ class PureToneConfig:
     def __init__(self):
         self.ACODEC = 'pcm_s24le'
         self.AR = '176400'
-        self.MAP_METADATA = '0'
         self.LOUDNORM_I = '-14'
         self.LOUDNORM_TP = '-1'
         self.LOUDNORM_LRA = '20'
         self.VOLUME = None
-        self.VOLUME_INCREASE = '1dB'  # Padrão alterado para 1dB
+        self.VOLUME_INCREASE = '1dB'
         self.RESAMPLER = 'soxr'
         self.PRECISION = '28'
         self.CHEBY = '1'
@@ -54,7 +53,6 @@ class PureToneConfig:
         self.HEADROOM_LIMIT = -0.5
         self.ADDITION = '0dB'
 
-# Instanciar a configuração
 CONFIG = PureToneConfig()
 
 # Diretórios de saída por formato
@@ -235,8 +233,7 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
 
     if volume:
         af = f"{af_base},volume={volume}"
-        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR,
-               '-map_metadata', CONFIG.MAP_METADATA, '-af', af, intermediate_wav, '-y']
+        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR, '-af', af, intermediate_wav, '-y']
         _, stderr, rc = run_command(cmd)
         if rc != 0 or not os.path.exists(intermediate_wav):
             logger.error(f"Error creating intermediate WAV for {input_file}. Check {local_log}")
@@ -245,8 +242,7 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
             return False
     else:
         af_first = f"{af_base},loudnorm=I={CONFIG.LOUDNORM_I}:TP={CONFIG.LOUDNORM_TP}:LRA={CONFIG.LOUDNORM_LRA}:print_format=summary"
-        _, stderr, rc = run_command(['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR,
-                                     '-map_metadata', CONFIG.MAP_METADATA, '-af', af_first, '-f', 'null', '-'])
+        _, stderr, rc = run_command(['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR, '-af', af_first, '-f', 'null', '-'])
         if rc != 0:
             logger.error(f"Error analyzing loudness for {input_file}. Check {local_log}")
             with open(local_log, 'a') as f:
@@ -268,8 +264,7 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
         af_second = (f"{af_base},loudnorm=I={CONFIG.LOUDNORM_I}:TP={CONFIG.LOUDNORM_TP}:LRA={CONFIG.LOUDNORM_LRA}:" +
                      f"measured_I={metrics['measured_I'].group(1)}:measured_LRA={metrics['measured_LRA'].group(1)}:" +
                      f"measured_TP={metrics['measured_TP'].group(1)}:measured_thresh={metrics['measured_thresh'].group(1)}")
-        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR,
-               '-map_metadata', CONFIG.MAP_METADATA, '-af', af_second, intermediate_wav, '-y']
+        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR, '-af', af_second, intermediate_wav, '-y']
         _, stderr, rc = run_command(cmd)
         if rc != 0 or not os.path.exists(intermediate_wav):
             logger.error(f"Error creating intermediate WAV for {input_file}. Check {local_log}")
@@ -280,7 +275,7 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
     if CONFIG.OUTPUT_FORMAT == 'wav':
         os.rename(intermediate_wav, output_file)
     else:
-        final_cmd = ['ffmpeg', '-i', intermediate_wav, '-c:a', CONFIG.OUTPUT_FORMAT]
+        final_cmd = ['ffmpeg', '-i', intermediate_wav, '-c:a', CONFIG.OUTPUT_FORMAT, '-map_metadata', '0']
         if CONFIG.OUTPUT_FORMAT == 'wavpack':
             final_cmd.extend(['-compression_level', CONFIG.WAVPACK_COMPRESSION])
         elif CONFIG.OUTPUT_FORMAT == 'flac':
@@ -311,21 +306,29 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
     logger.info(f"Converted {input_file} -> {output_file} (Size: {file_size_kb:.1f} KB)")
     logger.debug(f"Output - Max Volume: {output_max_volume}, Peak Level: {output_peak_level}")
 
-    if CONFIG.ENABLE_VISUALIZATION:
-        vis_file = normalize_path(os.path.join(spectrogram_dir, f"{base_name}.png"))
-        if CONFIG.VISUALIZATION_TYPE == 'waveform':
-            cmd = ['ffmpeg', '-i', output_file, '-filter_complex', f"showwavespic=s={CONFIG.VISUALIZATION_SIZE}", vis_file, '-y']
+    if CONFIG.OUTPUT_FORMAT == 'flac':
+        if volume:
+            applied_volume = volume
         else:
-            cmd = ['ffmpeg', '-i', output_file, '-lavfi', f"showspectrumpic=s={CONFIG.VISUALIZATION_SIZE}:mode={CONFIG.SPECTROGRAM_MODE}", vis_file, '-y']
-        _, stderr, rc = run_command(cmd)
+            applied_volume = f"loudnorm=I={CONFIG.LOUDNORM_I}:TP={CONFIG.LOUDNORM_TP}:LRA={CONFIG.LOUDNORM_LRA}"
+        comment_content = (
+            f"DSF > WAV > FLAC, Codec: {CONFIG.ACODEC}, "
+            f"Resampler: {CONFIG.RESAMPLER} with precision {CONFIG.PRECISION} and cheby, "
+            f"Applied Volume: {applied_volume}, Compression Level: {CONFIG.FLAC_COMPRESSION}"
+        )
+        metaflac_cmd = ['metaflac', '--set-tag', f"COMMENT={comment_content}", output_file]
+        _, stderr, rc = run_command(metaflac_cmd)
         if rc != 0:
-            logger.error(f"Error generating {CONFIG.VISUALIZATION_TYPE} for {output_file}. Check {local_log}")
-            with open(local_log, 'a') as f:
-                f.write(stderr + '\n')
+            logger.error(f"Failed to apply COMMENT to {output_file}: {stderr}")
+            return False
+        logger.debug(f"Applied COMMENT to {output_file}: {comment_content}")
+        verify_cmd = ['metaflac', '--list', '--block-type=VORBIS_COMMENT', output_file]
+        stdout, stderr, rc = run_command(verify_cmd)
+        if rc == 0 and "COMMENT=" in stdout:
+            logger.debug(f"Verified COMMENT in {output_file}: Present")
         else:
-            logger.info(f"Generated {CONFIG.VISUALIZATION_TYPE}: {vis_file}")
-
-    return True
+            logger.error(f"COMMENT not found in {output_file} after application:\n{stdout}\n{stderr}")
+            return False
 
 def cleanup(signum=None, frame=None):
     elapsed_time = int(time.time() - START_TIME)
@@ -467,23 +470,21 @@ Exemplos Práticos:
    ./puretone.py --debug /path/to/directory
 """
 
+def main():
     parser = argparse.ArgumentParser(
-        description=description,
+        description="PureTone - Conversor de DSD para Áudio de Alta Qualidade",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False
     )
-
-    parser.add_argument('-h', '--help', action='help', help="Mostra esta mensagem de ajuda e sai.")
     parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav', help="Formato de saída: 'wav', 'wavpack' ou 'flac'. Padrão: wav")
     parser.add_argument('--codec', help="Codec de áudio para saída WAV (ex.: pcm_s32le). Padrão: pcm_s24le")
     parser.add_argument('--sample-rate', type=int, help="Taxa de amostragem em Hz (ex.: 88200). Padrão: 176400")
-    parser.add_argument('--map-metadata', help="Mapeamento de metadados (ex.: 0 para manter). Padrão: 0")
     parser.add_argument('--loudnorm-I', help="Alvo de loudness integrado em LUFS. Padrão: -14")
     parser.add_argument('--loudnorm-TP', help="Limite de pico verdadeiro em dBTP. Padrão: -1")
     parser.add_argument('--loudnorm-LRA', help="Faixa de loudness em LU. Padrão: 20")
     parser.add_argument('--volume', help="Ajuste de volume: valor fixo (ex.: '2.5dB'), 'auto' ou 'analysis'. Padrão: None")
-    parser.add_argument('--volume-increase', default='1dB', help="Aumento de volume opcional (ex.: '1dB') a ser aplicado quando --volume auto e todas as faixas têm margem. Padrão: 1dB")
-    parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB') a ser aplicado apenas com --volume auto. Valores negativos não permitidos. Padrão: 0dB")
+    parser.add_argument('--volume-increase', default='1dB', help="Aumento de volume opcional (ex.: '1dB'). Padrão: 1dB")
+    parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB'). Padrão: 0dB")
     parser.add_argument('--headroom-limit', type=float, help="Volume máximo permitido em dB. Padrão: -0.5")
     parser.add_argument('--resampler', help="Motor de resampling (ex.: soxr). Padrão: soxr")
     parser.add_argument('--precision', type=int, help="Precisão do resampler (ex.: 20-28). Padrão: 28")
@@ -525,7 +526,6 @@ Exemplos Práticos:
 
     if args.codec: CONFIG.ACODEC = args.codec
     if args.sample_rate: CONFIG.AR = str(args.sample_rate)
-    if args.map_metadata: CONFIG.MAP_METADATA = args.map_metadata
     if args.loudnorm_I: CONFIG.LOUDNORM_I = args.loudnorm_I
     if args.loudnorm_TP: CONFIG.LOUDNORM_TP = args.loudnorm_TP
     if args.loudnorm_LRA: CONFIG.LOUDNORM_LRA = args.loudnorm_LRA
