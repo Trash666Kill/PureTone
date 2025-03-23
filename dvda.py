@@ -7,11 +7,11 @@ import time
 import sys
 import signal
 import shutil
-import termios  # Adicionado
-import tty      # Adicionado
+import termios
+import tty
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional
+from typing import List, Optional, Tuple  # Corrigido: Adicionado Tuple
 
 # Salvar o estado do terminal no início
 ORIGINAL_TERMINAL_STATE = None
