@@ -11,7 +11,7 @@ import termios
 import tty
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Tuple  # Corrigido: Adicionado Tuple
+from typing import List, Optional, Tuple
 
 # Salvar o estado do terminal no início
 ORIGINAL_TERMINAL_STATE = None
@@ -101,8 +101,31 @@ def downmix_flac(input_file: str, output_file: str, codec: str, sample_rate: str
         logger.error(f"Erro inesperado ao fazer downmix de {input_file}: {e}")
         return False
 
+def apply_flac_metadata(output_file: str, codec: str, compression_level: str, debug: bool = False) -> bool:
+    """Aplica metadados básicos ao arquivo FLAC final."""
+    comment_content = (
+        f"MLP > FLAC, Codec: {codec}, Compression Level: {compression_level}"
+    )
+    
+    metaflac_cmd = ['metaflac', '--set-tag', f"COMMENT={comment_content}", output_file]
+    _, stderr, rc = run_command(metaflac_cmd, debug=debug)
+    if rc != 0:
+        logger.error(f"Failed to apply COMMENT to {output_file}: {stderr}")
+        return False
+    logger.debug(f"Applied COMMENT to {output_file}: {comment_content}")
+    
+    verify_cmd = ['metaflac', '--list', '--block-type=VORBIS_COMMENT', output_file]
+    stdout, stderr, rc = run_command(verify_cmd, debug=debug)
+    if rc == 0 and "COMMENT=" in stdout:
+        logger.debug(f"Verified COMMENT in {output_file}: Present")
+    else:
+        logger.error(f"COMMENT not found in {output_file} after application:\n{stdout}\n{stderr}")
+        return False
+    
+    return True
+
 def process_file(input_file: str, output_dir: str, codec: str, sample_rate: str, compression_level: str, debug: bool = False) -> bool:
-    """Processa um arquivo MLP: converte para FLAC intermediário e faz downmix, mantendo o nome da fonte."""
+    """Processa um arquivo MLP: converte para FLAC intermediário, faz downmix e aplica metadados."""
     logger.debug(f"Processando arquivo: {input_file}")
     base_name = Path(input_file).stem
     intermediate_flac = os.path.join(output_dir, f"{base_name}_pcm.flac")  # Arquivo intermediário
@@ -130,7 +153,16 @@ def process_file(input_file: str, output_dir: str, codec: str, sample_rate: str,
             os.remove(intermediate_flac)
         return False
 
-    # Remove o arquivo intermediário após o downmix
+    # Aplica metadados ao arquivo final
+    success = apply_flac_metadata(output_flac, codec, compression_level, debug)
+    if not success:
+        if os.path.exists(intermediate_flac):
+            os.remove(intermediate_flac)
+        if os.path.exists(output_flac):
+            os.remove(output_flac)
+        return False
+
+    # Remove o arquivo intermediário após o downmix e aplicação de metadados
     if os.path.exists(intermediate_flac):
         try:
             os.remove(intermediate_flac)
@@ -174,15 +206,16 @@ Downmix - Conversor de MLP para FLAC com Downmix Estéreo
 
 Descrição:
 ----------
-Downmix é um script Python que converte arquivos MLP para FLAC com compressão ajustável, e faz downmix automático para estéreo. Suporta arquivos únicos ou diretórios, com processamento paralelo para maior eficiência. O arquivo final mantém o nome da fonte com extensão .flac.
+Downmix é um script Python que converte arquivos MLP para FLAC com compressão ajustável e faz downmix automático para estéreo. Suporta arquivos únicos ou diretórios, com processamento paralelo para maior eficiência. O arquivo final mantém o nome da fonte com extensão .flac e inclui metadados básicos (codec e compression level).
 
 Fluxo de Funcionamento:
 -----------------------
-1. **Validação de Dependências**: Verifica se ffmpeg está instalado.
+1. **Validação de Dependências**: Verifica se ffmpeg e metaflac estão instalados.
 2. **Análise de Caminho**: Aceita um arquivo .mlp ou diretório como entrada.
 3. **Processamento**:
    - Converte MLP para FLAC intermediário (_pcm.flac) com compressão, codec e sample rate fornecidos.
    - Faz downmix para estéreo, salvando como <nome_original>.flac.
+   - Aplica metadados (COMMENT) ao arquivo final com codec e compression level.
    - Remove arquivo intermediário (_pcm.flac).
 4. **Saída**: Salva arquivos em subdiretório 'flac' (ex.: track-01-01[1]-03-[L-R]-24-192000.flac).
 5. **Limpeza**: Remove arquivos temporários e restaura o terminal ao finalizar ou em caso de interrupção.
@@ -203,8 +236,8 @@ Exemplos:
 1. Converter um único arquivo MLP com padrões:
    ./downmix.py /path/to/file.mlp
 
-2. Converter todos os arquivos MLP em um diretório com compressão 8, codec s32 e sample rate 192000:
-   ./downmix.py --compression-level 8 --codec s32 --sample-rate 192000 /path/to/directory
+2. Converter com compressão 8, codec s32, sample rate 96000:
+   ./downmix.py --compression-level 8 --codec s32 --sample-rate 96000 /path/to/directory
 
 3. Ativar modo depuração para logs detalhados:
    ./downmix.py --debug /path/to/directory
@@ -242,9 +275,10 @@ Exemplos:
     CONFIG.FLAC_COMPRESSION = args.compression_level
 
     # Verificar dependências
-    if not shutil.which('ffmpeg'):
-        logger.error("ffmpeg não encontrado. Por favor, instale-o.")
-        sys.exit(1)
+    for cmd in ['ffmpeg', 'metaflac']:
+        if not shutil.which(cmd):
+            logger.error(f"{cmd} não encontrado. Por favor, instale-o.")
+            sys.exit(1)
 
     # Inicializar arquivos temporários
     for temp_file in TEMP_FILES.values():
