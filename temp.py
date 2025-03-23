@@ -398,7 +398,7 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
                 f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
 
 def main():
-    description = """
+        description = """
 PureTone - Conversor de DSD para Áudio de Alta Qualidade
 
 Descrição:
@@ -413,7 +413,8 @@ Fluxo Detalhado de Funcionamento:
    - Cria arquivos WAV temporários para análise.
    - Calcula volumes máximos (DSD e WAV) usando ffmpeg.
    - Determina ajustes de volume (y) para evitar clipping, respeitando o limite de headroom (--headroom-limit).
-   - Aplica acréscimo adicional (--addition) ao volume ajustado, se especificado (apenas com --volume auto).
+   - Se --addition não for especificado, tenta adicionar 2dB ao volume de todas as faixas, desde que todas tenham margem suficiente (WAV Max Volume + 2dB ≤ --headroom-limit). Caso contrário, segue o fluxo padrão.
+   - Se --addition for especificado, pula o ajuste de 2dB e aplica apenas o valor de --addition, exibindo um alerta no log.
 4. **Processamento de Arquivos**:
    - Converte cada arquivo para WAV intermediário com resampling e ajustes de volume.
    - Converte WAV intermediário para o formato final (WAV, WavPack ou FLAC).
@@ -423,6 +424,7 @@ Fluxo Detalhado de Funcionamento:
    - Salva arquivos convertidos em subdiretórios (wv para WAV, wvpk para WavPack, flac para FLAC).
    - Remove arquivos temporários.
    - Gera um resumo de ajustes de volume (se --volume auto) e registra o tempo de execução.
+   - Exibe logs sobre o ajuste de 2dB (se aplicado, ou motivo por não ter sido aplicado).
 
 Valores Padrão:
 ---------------
@@ -445,6 +447,11 @@ Valores Padrão:
 - Número de tarefas paralelas (--parallel): 2
 - Arquivo de log (--log): None
 - Modo depuração (--debug): False
+
+Notas Adicionais:
+-----------------
+- Quando --volume auto é usado sem --addition, o script tenta adicionar 2dB ao volume ajustado de todas as faixas, desde que todas tenham margem suficiente (WAV Max Volume + 2dB ≤ --headroom-limit). Se não houver margem ou --addition for especificado, o ajuste de 2dB é ignorado.
+- Um log detalhado será exibido ao final, indicando se o ajuste de 2dB foi aplicado ou o motivo por não ter sido (ex.: falta de margem ou uso de --addition).
 
 Parâmetros e Uso:
 ----------------
