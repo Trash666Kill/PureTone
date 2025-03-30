@@ -27,7 +27,6 @@ logger = logging.getLogger('downmix')
 class DownmixConfig:
     def __init__(self):
         self.FLAC_COMPRESSION = '12'
-        self.CHANNELS = 2
         self.OVERWRITE = True
         self.SKIP_EXISTING = False
         self.PARALLEL_JOBS = 2
@@ -98,7 +97,7 @@ def downmix_flac(input_file: str, output_file: str, codec: str, sample_rate: str
             if debug:
                 logger.debug(f"Saída FFmpeg: {stdout}\nErro FFmpeg: {stderr}")
             return False
-        logger.info(f"Arquivo FLAC downmixed: {output_file}")
+        logger.info(f"Arquivo FLAC downmixed para {channels} canais: {output_file}")
         return True
     except Exception as e:
         logger.error(f"Erro inesperado ao fazer downmix de {input_file}: {e}")
@@ -114,7 +113,7 @@ def apply_flac_metadata(output_file: str, input_format: str, codec: str, compres
     logger.info(f"Metadados aplicados a {output_file}: {comment_content}")
     return True
 
-def process_file(input_file: str, output_dir: str, codec: str, sample_rate: str, channels: int, compression_level: str, debug: bool = False) -> bool:
+def process_file(input_file: str, output_dir: str, codec: str, sample_rate: str, channels: Optional[int], compression_level: str, debug: bool = False) -> bool:
     logger.debug(f"Processando arquivo: {input_file}")
     base_name = Path(input_file).stem
     intermediate_flac = os.path.join(output_dir, f"{base_name}_temp.flac")
@@ -142,8 +141,13 @@ def process_file(input_file: str, output_dir: str, codec: str, sample_rate: str,
     if not success:
         return False
 
-    # Sempre faz downmix para o número de canais especificado
-    success = downmix_flac(intermediate_flac, output_flac, codec, sample_rate, compression_level, channels, debug)
+    if channels is not None:
+        # Realiza downmix se channels for especificado
+        success = downmix_flac(intermediate_flac, output_flac, codec, sample_rate, compression_level, channels, debug)
+    else:
+        # Sem downmix, apenas move o arquivo temporário para o final
+        logger.info(f"Pulando downmix para {input_file}: número de canais não especificado")
+        success = shutil.move(intermediate_flac, output_flac) is not None
 
     if not success:
         if os.path.exists(intermediate_flac):
@@ -165,7 +169,7 @@ def process_file(input_file: str, output_dir: str, codec: str, sample_rate: str,
 
     return True
 
-def process_files_in_parallel(files: List[str], output_dir: str, codec: str, sample_rate: str, channels: int, compression_level: str, debug: bool = False) -> bool:
+def process_files_in_parallel(files: List[str], output_dir: str, codec: str, sample_rate: str, channels: Optional[int], compression_level: str, debug: bool = False) -> bool:
     logger.info(f"Iniciando processamento paralelo com {CONFIG.PARALLEL_JOBS} trabalhadores para {len(files)} arquivos")
     with ThreadPoolExecutor(max_workers=CONFIG.PARALLEL_JOBS) as executor:
         results = [executor.submit(process_file, file, output_dir, codec, sample_rate, channels, compression_level, debug) for file in files]
@@ -193,18 +197,18 @@ def cleanup(signum=None, frame=None):
 
 def main():
     description = """
-Downmix - Conversor de MLP/PCM para FLAC com Downmix Manual
+Downmix - Conversor de MLP/PCM para FLAC com Downmix Opcional
 
 Descrição:
 ----------
-Converte arquivos MLP ou PCM para FLAC usando parâmetros fornecidos manualmente. Sempre faz downmix para o número de canais especificado. Suporta processamento paralelo e metadados.
+Converte arquivos MLP ou PCM para FLAC usando parâmetros fornecidos manualmente. O downmix é realizado apenas se o número de canais for especificado; caso contrário, mantém os canais originais.
 
 Fluxo de Funcionamento:
 -----------------------
 1. **Validação**: Verifica ffmpeg e metaflac.
 2. **Processamento**:
-   - Converte MLP/PCM para FLAC com codec, sample rate e canais fornecidos.
-   - Faz downmix para o número de canais especificado.
+   - Converte MLP/PCM para FLAC com codec e sample rate fornecidos.
+   - Faz downmix se --channels for especificado; caso contrário, mantém os canais originais.
    - Aplica metadados com formato, codec e compression level.
 3. **Saída**: Salva em subdiretório 'flac'.
 
@@ -212,14 +216,20 @@ Parâmetros Obrigatórios:
 ------------------------
 - --codec: Formato de amostra (s16 ou s32)
 - --sample-rate: Taxa de amostragem em Hz
-- --channels: Número de canais para downmix
+
+Parâmetros Opcionais:
+---------------------
+- --channels: Número de canais para downmix (se omitido, não realiza downmix)
 
 Exemplos:
 ---------
-1. Converter com 2 canais, 44100 Hz e codec s32:
+1. Converter sem downmix:
+   ./downmix.py --codec s32 --sample-rate 44100 /path/to/directory
+
+2. Converter com downmix para 2 canais:
    ./downmix.py --codec s32 --sample-rate 44100 --channels 2 /path/to/directory
 
-2. Modo debug com 6 canais:
+3. Modo debug com downmix para 6 canais:
    ./downmix.py --codec s32 --sample-rate 192000 --channels 6 --debug /path/to/directory
 """
     parser = argparse.ArgumentParser(
@@ -231,7 +241,7 @@ Exemplos:
     parser.add_argument('path', nargs='?', default=os.getcwd(), help="Caminho para um arquivo .mlp/.pcm ou diretório (padrão: diretório atual)")
     parser.add_argument('--codec', required=True, choices=['s16', 's32'], help="Formato de amostra para saída FLAC (s16 ou s32)")
     parser.add_argument('--sample-rate', required=True, type=str, help="Taxa de amostragem em Hz (ex.: 44100, 192000)")
-    parser.add_argument('--channels', required=True, type=int, help="Número de canais para downmix (ex.: 2 para estéreo)")
+    parser.add_argument('--channels', type=int, help="Número de canais para downmix (se omitido, não realiza downmix)")
     parser.add_argument('--compression-level', type=str, default='12', help="Nível de compressão FLAC (0-12). Padrão: 12")
     parser.add_argument('--parallel', type=int, help=f"Número de tarefas paralelas (padrão: {CONFIG.PARALLEL_JOBS})")
     parser.add_argument('--skip-existing', action='store_true', help="Pula arquivos se a saída já existir (padrão: False)")
@@ -247,6 +257,10 @@ Exemplos:
     if args.skip_existing:
         CONFIG.SKIP_EXISTING = True
     CONFIG.FLAC_COMPRESSION = args.compression_level
+
+    # Aviso se --channels não for especificado
+    if args.channels is None:
+        logger.warning("Número de canais não especificado. Downmix não será realizado.")
 
     for cmd in ['ffmpeg', 'metaflac']:
         if not shutil.which(cmd):
