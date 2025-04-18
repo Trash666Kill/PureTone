@@ -27,31 +27,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger('puretone')
 
-# Configurações padrão
-CONFIG = {
-    'ACODEC': 'pcm_s24le',
-    'AR': '176400',
-    'MAP_METADATA': '0',
-    'LOUDNORM_I': '-14',
-    'LOUDNORM_TP': '-1',
-    'LOUDNORM_LRA': '20',
-    'VOLUME': None,
-    'RESAMPLER': 'soxr',
-    'PRECISION': '28',
-    'CHEBY': '1',
-    'OUTPUT_FORMAT': 'wav',
-    'WAVPACK_COMPRESSION': '0',
-    'FLAC_COMPRESSION': '0',
-    'OVERWRITE': True,
-    'SKIP_EXISTING': False,
-    'PARALLEL_JOBS': 2,
-    'ENABLE_VISUALIZATION': False,
-    'VISUALIZATION_TYPE': 'spectrogram',
-    'VISUALIZATION_SIZE': '1920x1080',
-    'SPECTROGRAM_MODE': 'combined',
-    'HEADROOM_LIMIT': -0.5,
-    'ADDITION': '0dB',
-}
+# Classe de configuração
+class PureToneConfig:
+    def __init__(self):
+        self.ACODEC = 'pcm_s24le'
+        self.AR = '176400'
+        self.LOUDNORM_I = '-14'
+        self.LOUDNORM_TP = '-1'
+        self.LOUDNORM_LRA = '20'
+        self.VOLUME = None
+        self.VOLUME_INCREASE = '1dB'
+        self.RESAMPLER = 'soxr'
+        self.PRECISION = '28'
+        self.CHEBY = '1'
+        self.OUTPUT_FORMAT = 'wav'
+        self.WAVPACK_COMPRESSION = '0'
+        self.FLAC_COMPRESSION = '0'
+        self.OVERWRITE = True
+        self.SKIP_EXISTING = False
+        self.PARALLEL_JOBS = 2
+        self.ENABLE_VISUALIZATION = False
+        self.VISUALIZATION_TYPE = 'spectrogram'
+        self.VISUALIZATION_SIZE = '1920x1080'
+        self.SPECTROGRAM_MODE = 'combined'
+        self.HEADROOM_LIMIT = -0.5
+        self.ADDITION = '0dB'
+
+CONFIG = PureToneConfig()
 
 # Diretórios de saída por formato
 OUTPUT_DIRS = {'wav': 'wv', 'wavpack': 'wvpk', 'flac': 'flac'}
@@ -85,7 +87,7 @@ def validate_addition(addition: str) -> bool:
     if not validate_volume(addition):
         return False
     value = float(addition.replace('dB', ''))
-    return value >= 0  # Só permite valores não negativos
+    return value >= 0
 
 def add_db(value_db: str, addition_db: str) -> str:
     value = float(value_db.replace('dB', '')) if value_db != 'N/A' else 0
@@ -121,8 +123,8 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
         temp_wav = f"/tmp/puretone_{os.getpid()}_{base_name}_temp.wav"
         temp_wav_files.append(temp_wav)
 
-        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'],
-               '-map_metadata', CONFIG['MAP_METADATA'], '-af', f"aresample=resampler={CONFIG['RESAMPLER']}:precision={CONFIG['PRECISION']}:cheby={CONFIG['CHEBY']}", temp_wav, '-y']
+        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR,
+               '-af', f"aresample=resampler={CONFIG.RESAMPLER}:precision={CONFIG.PRECISION}:cheby={CONFIG.CHEBY}", temp_wav, '-y']
         _, stderr, rc = run_command(cmd)
         if rc != 0 or not os.path.exists(temp_wav):
             logger.error(f"Failed to create temporary WAV for {input_file}: {stderr}")
@@ -154,89 +156,75 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
     max_volumes = [entry['wav_max_volume'] + entry['y'] for entry in volume_adjustments]
     highest_volume = max(max_volumes)
 
-    # Variáveis para rastrear o ajuste de 2dB e faixas sem margem
-    applied_2db = False
-    insufficient_headroom_files = []
+    applied_increase = False
+    volume_increase_db = float(CONFIG.VOLUME_INCREASE.replace('dB', ''))
 
-    # Verificar se podemos adicionar 2dB (apenas se --volume auto e sem --addition)
-    if CONFIG['VOLUME'] == 'auto' and CONFIG['ADDITION'] == '0dB':
-        # Verificar se todas as faixas têm margem para +2dB
-        all_have_margin = True
-        for entry in volume_adjustments:
-            adjusted_volume = entry['wav_max_volume'] + 2  # Adicionar 2dB ao WAV Max Volume
-            if adjusted_volume > CONFIG['HEADROOM_LIMIT']:
-                all_have_margin = False
-                insufficient_headroom_files.append((entry['file'], entry['wav_max_volume']))
-                break
-
+    if CONFIG.VOLUME == 'auto' and CONFIG.ADDITION == '0dB':
+        all_have_margin = all(entry['wav_max_volume'] + volume_increase_db <= CONFIG.HEADROOM_LIMIT for entry in volume_adjustments)
         if all_have_margin and volume_adjustments:
-            logger.info("All tracks have sufficient headroom. Applying 2dB increase to all tracks.")
-            applied_2db = True
+            logger.info(f"All tracks have sufficient headroom. Applying {volume_increase_db}dB increase to all tracks.")
+            applied_increase = True
         else:
-            logger.info("Not all tracks have sufficient headroom for 2dB increase. Following standard flow.")
+            logger.info(f"Not all tracks have sufficient headroom for {volume_increase_db}dB increase. Following standard flow.")
 
-    # Calcular os volumes finais
-    if highest_volume > CONFIG['HEADROOM_LIMIT']:
-        adjustment = CONFIG['HEADROOM_LIMIT'] - highest_volume
-        logger.info(f"Highest adjusted volume ({highest_volume:.1f} dB) exceeds limit ({CONFIG['HEADROOM_LIMIT']} dB). Applying uniform adjustment of {adjustment:.1f} dB")
+    if highest_volume > CONFIG.HEADROOM_LIMIT:
+        adjustment = CONFIG.HEADROOM_LIMIT - highest_volume
+        logger.info(f"Highest adjusted volume ({highest_volume:.1f} dB) exceeds limit ({CONFIG.HEADROOM_LIMIT} dB). Applying uniform adjustment of {adjustment:.1f} dB")
         for entry in volume_adjustments:
             base_volume = f"{(entry['y'] + adjustment):.1f}dB"
-            # Adicionar 2dB ao base_volume se aplicável
-            if applied_2db:
-                base_volume_value = float(base_volume.replace('dB', '')) + 2
+            if applied_increase:
+                base_volume_value = float(base_volume.replace('dB', '')) + volume_increase_db
                 base_volume = f"{base_volume_value:.1f}dB"
-            final_volume = add_db(base_volume, CONFIG['ADDITION'])
+            final_volume = add_db(base_volume, CONFIG.ADDITION)
             final_volumes.append((entry['file'], final_volume))
     else:
-        logger.info(f"No adjusted volumes exceed {CONFIG['HEADROOM_LIMIT']} dB. Using individual y values as volume adjustments")
+        logger.info(f"No adjusted volumes exceed {CONFIG.HEADROOM_LIMIT} dB. Using individual y values as volume adjustments")
         for entry in volume_adjustments:
             base_volume = f"{entry['y']:.1f}dB"
-            # Adicionar 2dB ao base_volume se aplicável
-            if applied_2db:
-                base_volume_value = float(base_volume.replace('dB', '')) + 2
+            if applied_increase:
+                base_volume_value = float(base_volume.replace('dB', '')) + volume_increase_db
                 base_volume = f"{base_volume_value:.1f}dB"
-            final_volume = add_db(base_volume, CONFIG['ADDITION'])
+            final_volume = add_db(base_volume, CONFIG.ADDITION)
             final_volumes.append((entry['file'], final_volume))
 
     if log_file:
         with open(log_file, 'a') as f:
             for entry in volume_adjustments:
                 f.write(f"File {entry['file']}: DSD->WAV y = {entry['y']:.1f} dB, WAV Max Volume = {entry['wav_max_volume']:.1f} dB\n")
-            if highest_volume > CONFIG['HEADROOM_LIMIT']:
-                f.write(f"Applied uniform adjustment of {adjustment:.1f} dB to keep highest volume at {CONFIG['HEADROOM_LIMIT']} dB\n")
+            if highest_volume > CONFIG.HEADROOM_LIMIT:
+                f.write(f"Applied uniform adjustment of {adjustment:.1f} dB to keep highest volume at {CONFIG.HEADROOM_LIMIT} dB\n")
             else:
-                f.write(f"Used individual y values as no volumes exceed {CONFIG['HEADROOM_LIMIT']} dB\n")
-            if CONFIG['ADDITION'] != '0dB':
-                f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
+                f.write(f"Used individual y values as no volumes exceed {CONFIG.HEADROOM_LIMIT} dB\n")
+            if CONFIG.ADDITION != '0dB':
+                f.write(f"Applied additional volume adjustment: {CONFIG.ADDITION}\n")
 
-    return final_volumes, volume_adjustments, applied_2db, insufficient_headroom_files
+    return final_volumes, volume_adjustments
 
 def process_file(input_file: str, output_dir: str, volume: str = None, log_file: Optional[str] = None) -> bool:
     logger.debug(f"Processing file: {input_file}")
     base_name = Path(input_file).stem
     intermediate_wav = normalize_path(os.path.join(output_dir, f"{base_name}_intermediate.wav"))
-    output_file = normalize_path(os.path.join(output_dir, f"{base_name}.{FORMAT_EXTENSIONS[CONFIG['OUTPUT_FORMAT']]}"))
+    output_file = normalize_path(os.path.join(output_dir, f"{base_name}.{FORMAT_EXTENSIONS[CONFIG.OUTPUT_FORMAT]}"))
     spectrogram_dir = normalize_path(os.path.join(output_dir, 'spectrogram'))
     local_log = normalize_path(os.path.join(output_dir, 'log.txt'))
 
     os.makedirs(output_dir, exist_ok=True)
-    if CONFIG['ENABLE_VISUALIZATION']:
+    if CONFIG.ENABLE_VISUALIZATION:
         os.makedirs(spectrogram_dir, exist_ok=True)
 
     if os.path.exists(output_file):
-        if CONFIG['SKIP_EXISTING']:
+        if CONFIG.SKIP_EXISTING:
             logger.info(f"Skipping {input_file}: {output_file} already exists (--skip-existing enabled)")
             return True
-        elif CONFIG['OVERWRITE']:
+        elif CONFIG.OVERWRITE:
             logger.info(f"Overwriting {output_file} due to OVERWRITE=True")
 
-    af_base = f"aresample=resampler={CONFIG['RESAMPLER']}:precision={CONFIG['PRECISION']}:cheby={CONFIG['CHEBY']}"
+    af_base = f"aresample=resampler={CONFIG.RESAMPLER}:precision={CONFIG.PRECISION}:cheby={CONFIG.CHEBY}"
     analyze_peaks(input_file, TEMP_FILES['PEAK_LOG'], "Input")
 
     if volume:
         af = f"{af_base},volume={volume}"
-        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'],
-               '-map_metadata', CONFIG['MAP_METADATA'], '-af', af, intermediate_wav, '-y']
+        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR, '-af', af, intermediate_wav, '-y']
         _, stderr, rc = run_command(cmd)
         if rc != 0 or not os.path.exists(intermediate_wav):
             logger.error(f"Error creating intermediate WAV for {input_file}. Check {local_log}")
@@ -244,9 +232,8 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
                 f.write(stderr + '\n')
             return False
     else:
-        af_first = f"{af_base},loudnorm=I={CONFIG['LOUDNORM_I']}:TP={CONFIG['LOUDNORM_TP']}:LRA={CONFIG['LOUDNORM_LRA']}:print_format=summary"
-        _, stderr, rc = run_command(['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'],
-                                     '-map_metadata', CONFIG['MAP_METADATA'], '-af', af_first, '-f', 'null', '-'])
+        af_first = f"{af_base},loudnorm=I={CONFIG.LOUDNORM_I}:TP={CONFIG.LOUDNORM_TP}:LRA={CONFIG.LOUDNORM_LRA}:print_format=summary"
+        _, stderr, rc = run_command(['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR, '-af', af_first, '-f', 'null', '-'])
         if rc != 0:
             logger.error(f"Error analyzing loudness for {input_file}. Check {local_log}")
             with open(local_log, 'a') as f:
@@ -265,11 +252,10 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
                 f.write(stderr + '\n')
             return False
 
-        af_second = (f"{af_base},loudnorm=I={CONFIG['LOUDNORM_I']}:TP={CONFIG['LOUDNORM_TP']}:LRA={CONFIG['LOUDNORM_LRA']}:" +
+        af_second = (f"{af_base},loudnorm=I={CONFIG.LOUDNORM_I}:TP={CONFIG.LOUDNORM_TP}:LRA={CONFIG.LOUDNORM_LRA}:" +
                      f"measured_I={metrics['measured_I'].group(1)}:measured_LRA={metrics['measured_LRA'].group(1)}:" +
                      f"measured_TP={metrics['measured_TP'].group(1)}:measured_thresh={metrics['measured_thresh'].group(1)}")
-        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG['ACODEC'], '-ar', CONFIG['AR'],
-               '-map_metadata', CONFIG['MAP_METADATA'], '-af', af_second, intermediate_wav, '-y']
+        cmd = ['ffmpeg', '-i', input_file, '-acodec', CONFIG.ACODEC, '-ar', CONFIG.AR, '-af', af_second, intermediate_wav, '-y']
         _, stderr, rc = run_command(cmd)
         if rc != 0 or not os.path.exists(intermediate_wav):
             logger.error(f"Error creating intermediate WAV for {input_file}. Check {local_log}")
@@ -277,19 +263,19 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
                 f.write(stderr + '\n')
             return False
 
-    if CONFIG['OUTPUT_FORMAT'] == 'wav':
+    if CONFIG.OUTPUT_FORMAT == 'wav':
         os.rename(intermediate_wav, output_file)
     else:
-        final_cmd = ['ffmpeg', '-i', intermediate_wav, '-c:a', CONFIG['OUTPUT_FORMAT']]
-        if CONFIG['OUTPUT_FORMAT'] == 'wavpack':
-            final_cmd.extend(['-compression_level', CONFIG['WAVPACK_COMPRESSION']])
-        elif CONFIG['OUTPUT_FORMAT'] == 'flac':
-            final_cmd.extend(['-compression_level', CONFIG['FLAC_COMPRESSION']])
+        final_cmd = ['ffmpeg', '-i', intermediate_wav, '-c:a', CONFIG.OUTPUT_FORMAT, '-map_metadata', '0']
+        if CONFIG.OUTPUT_FORMAT == 'wavpack':
+            final_cmd.extend(['-compression_level', CONFIG.WAVPACK_COMPRESSION])
+        elif CONFIG.OUTPUT_FORMAT == 'flac':
+            final_cmd.extend(['-compression_level', CONFIG.FLAC_COMPRESSION])
         final_cmd.extend([output_file, '-y'])
         try:
             _, stderr, rc = run_command(final_cmd)
             if rc != 0:
-                logger.error(f"Error converting {input_file} to {CONFIG['OUTPUT_FORMAT']}. Check {local_log}")
+                logger.error(f"Error converting {input_file} to {CONFIG.OUTPUT_FORMAT}. Check {local_log}")
                 with open(local_log, 'a') as f:
                     f.write(stderr + '\n')
                 return False
@@ -311,19 +297,43 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
     logger.info(f"Converted {input_file} -> {output_file} (Size: {file_size_kb:.1f} KB)")
     logger.debug(f"Output - Max Volume: {output_max_volume}, Peak Level: {output_peak_level}")
 
-    if CONFIG['ENABLE_VISUALIZATION']:
-        vis_file = normalize_path(os.path.join(spectrogram_dir, f"{base_name}.png"))
-        if CONFIG['VISUALIZATION_TYPE'] == 'waveform':
-            cmd = ['ffmpeg', '-i', output_file, '-filter_complex', f"showwavespic=s={CONFIG['VISUALIZATION_SIZE']}", vis_file, '-y']
+    if CONFIG.OUTPUT_FORMAT == 'flac':
+        if volume:
+            applied_volume = volume
         else:
-            cmd = ['ffmpeg', '-i', output_file, '-lavfi', f"showspectrumpic=s={CONFIG['VISUALIZATION_SIZE']}:mode={CONFIG['SPECTROGRAM_MODE']}", vis_file, '-y']
+            applied_volume = f"loudnorm=I={CONFIG.LOUDNORM_I}:TP={CONFIG.LOUDNORM_TP}:LRA={CONFIG.LOUDNORM_LRA}"
+        comment_content = (
+            f"DSF > WAV > FLAC, Codec: {CONFIG.ACODEC}, "
+            f"Resampler: {CONFIG.RESAMPLER} with precision {CONFIG.PRECISION} and cheby, "
+            f"Applied Volume: {applied_volume}, Compression Level: {CONFIG.FLAC_COMPRESSION}"
+        )
+        metaflac_cmd = ['metaflac', '--set-tag', f"COMMENT={comment_content}", output_file]
+        _, stderr, rc = run_command(metaflac_cmd)
+        if rc != 0:
+            logger.error(f"Failed to apply COMMENT to {output_file}: {stderr}")
+            return False
+        logger.debug(f"Applied COMMENT to {output_file}: {comment_content}")
+        verify_cmd = ['metaflac', '--list', '--block-type=VORBIS_COMMENT', output_file]
+        stdout, stderr, rc = run_command(verify_cmd)
+        if rc == 0 and "COMMENT=" in stdout:
+            logger.debug(f"Verified COMMENT in {output_file}: Present")
+        else:
+            logger.error(f"COMMENT not found in {output_file} after application:\n{stdout}\n{stderr}")
+            return False
+
+    if CONFIG.ENABLE_VISUALIZATION:
+        vis_file = normalize_path(os.path.join(spectrogram_dir, f"{base_name}.png"))
+        if CONFIG.VISUALIZATION_TYPE == 'waveform':
+            cmd = ['ffmpeg', '-i', output_file, '-filter_complex', f"showwavespic=s={CONFIG.VISUALIZATION_SIZE}", vis_file, '-y']
+        else:
+            cmd = ['ffmpeg', '-i', output_file, '-lavfi', f"showspectrumpic=s={CONFIG.VISUALIZATION_SIZE}:mode={CONFIG.SPECTROGRAM_MODE}", vis_file, '-y']
         _, stderr, rc = run_command(cmd)
         if rc != 0:
-            logger.error(f"Error generating {CONFIG['VISUALIZATION_TYPE']} for {output_file}. Check {local_log}")
+            logger.error(f"Error generating {CONFIG.VISUALIZATION_TYPE} for {output_file}. Check {local_log}")
             with open(local_log, 'a') as f:
                 f.write(stderr + '\n')
         else:
-            logger.info(f"Generated {CONFIG['VISUALIZATION_TYPE']}: {vis_file}")
+            logger.info(f"Generated {CONFIG.VISUALIZATION_TYPE}: {vis_file}")
 
     return True
 
@@ -358,18 +368,19 @@ def resolve_path(path_str: str) -> Path:
     return Path(os.path.join(os.getcwd(), path_str))
 
 def process_files_in_parallel(files: List[str], output_dir: str, volume_map: List[Tuple[str, str]], log_file: Optional[str] = None) -> bool:
-    logger.info(f"Starting parallel processing with {CONFIG['PARALLEL_JOBS']} workers for {len(files)} files")
-    with ThreadPoolExecutor(max_workers=CONFIG['PARALLEL_JOBS']) as executor:
+    logger.info(f"Starting parallel processing with {CONFIG.PARALLEL_JOBS} workers for {len(files)} files")
+    with ThreadPoolExecutor(max_workers=CONFIG.PARALLEL_JOBS) as executor:
         results = []
         for file, volume in volume_map:
             results.append(executor.submit(process_file, file, output_dir, volume, log_file))
         outcomes = [future.result() for future in results]
-    logger.info(f"Completed parallel processing for {len(files)} files")
-    return all(outcomes)
+    success = all(outcomes)
+    logger.info(f"Completed parallel processing for {len(files)} files. Success: {success}")
+    return success
 
 def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[str, str]]], log_file: Optional[str] = None):
     logger.info("\n=== Volume Adjustment Summary ===")
-    col_widths = [40, 15, 20, 20]  # Removida a largura da coluna 'Output Max Volume'
+    col_widths = [40, 15, 20, 20]
     logger.info(f"{'File':<40} {'y (dB) ffmpeg':^15} {'WAV Max Volume (dB)':^20} {'Applied Volume (dB)':^20}")
     logger.info("-" * sum(col_widths))
 
@@ -382,8 +393,8 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
         logger.info(f"{entry['file'][:38]:<40} {entry['y']:^15.1f} {entry['wav_max_volume']:^20.1f} {applied_volume:^20}")
     logger.info("-" * sum(col_widths))
 
-    if CONFIG['ADDITION'] != '0dB':
-        logger.info(f"Applied additional volume adjustment: {CONFIG['ADDITION']}")
+    if CONFIG.ADDITION != '0dB':
+        logger.info(f"Applied additional volume adjustment: {CONFIG.ADDITION}")
 
     if log_file:
         with open(log_file, 'a') as f:
@@ -394,11 +405,11 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
                 applied_volume = volume_dict.get(entry['file'], "N/A")
                 f.write(f"{entry['file'][:38]:<40} {entry['y']:^15.1f} {entry['wav_max_volume']:^20.1f} {applied_volume:^20}\n")
             f.write("-" * sum(col_widths) + "\n")
-            if CONFIG['ADDITION'] != '0dB':
-                f.write(f"Applied additional volume adjustment: {CONFIG['ADDITION']}\n")
+            if CONFIG.ADDITION != '0dB':
+                f.write(f"Applied additional volume adjustment: {CONFIG.ADDITION}\n")
 
 def main():
-        description = """
+    description = """
 PureTone - Conversor de DSD para Áudio de Alta Qualidade
 
 Descrição:
@@ -413,8 +424,8 @@ Fluxo Detalhado de Funcionamento:
    - Cria arquivos WAV temporários para análise.
    - Calcula volumes máximos (DSD e WAV) usando ffmpeg.
    - Determina ajustes de volume (y) para evitar clipping, respeitando o limite de headroom (--headroom-limit).
-   - Se --addition não for especificado, tenta adicionar 2dB ao volume de todas as faixas, desde que todas tenham margem suficiente (WAV Max Volume + 2dB ≤ --headroom-limit). Caso contrário, segue o fluxo padrão.
-   - Se --addition for especificado, pula o ajuste de 2dB e aplica apenas o valor de --addition, exibindo um alerta no log.
+   - Se --addition não for especificado, tenta adicionar 1dB (ou valor especificado em --volume-increase) ao volume de todas as faixas, desde que todas tenham margem suficiente (WAV Max Volume + 1dB ≤ --headroom-limit). Caso contrário, segue o fluxo padrão.
+   - Se --addition for especificado, pula o ajuste de volume-increase e aplica apenas o valor de --addition, exibindo um alerta no log.
 4. **Processamento de Arquivos**:
    - Converte cada arquivo para WAV intermediário com resampling e ajustes de volume.
    - Converte WAV intermediário para o formato final (WAV, WavPack ou FLAC).
@@ -424,18 +435,18 @@ Fluxo Detalhado de Funcionamento:
    - Salva arquivos convertidos em subdiretórios (wv para WAV, wvpk para WavPack, flac para FLAC).
    - Remove arquivos temporários.
    - Gera um resumo de ajustes de volume (se --volume auto) e registra o tempo de execução.
-   - Exibe logs sobre o ajuste de 2dB (se aplicado, ou motivo por não ter sido aplicado).
+   - Exibe logs sobre o ajuste de volume-increase (se aplicado, ou motivo por não ter sido aplicado).
 
 Valores Padrão:
 ---------------
 - Formato de saída (--format): wav
 - Codec de áudio (--codec): pcm_s24le
 - Taxa de amostragem (--sample-rate): 176400 Hz
-- Mapeamento de metadados (--map-metadata): 0
 - Alvo de loudness integrado (--loudnorm-I): -14 LUFS
 - Pico verdadeiro (--loudnorm-TP): -1 dBTP
 - Faixa de loudness (--loudnorm-LRA): 20 LU
 - Ajuste de volume (--volume): None (usa loudnorm por padrão)
+- Aumento de volume opcional (--volume-increase): 1dB (aplicado com --volume auto, se houver margem)
 - Acréscimo adicional (--addition): 0dB (só com --volume auto, valores negativos não permitidos)
 - Limite de headroom (--headroom-limit): -0.5 dB
 - Resampler (--resampler): soxr
@@ -448,22 +459,13 @@ Valores Padrão:
 - Arquivo de log (--log): None
 - Modo depuração (--debug): False
 
-Notas Adicionais:
------------------
-- Quando --volume auto é usado sem --addition, o script tenta adicionar 2dB ao volume ajustado de todas as faixas, desde que todas tenham margem suficiente (WAV Max Volume + 2dB ≤ --headroom-limit). Se não houver margem ou --addition for especificado, o ajuste de 2dB é ignorado.
-- Um log detalhado será exibido ao final, indicando se o ajuste de 2dB foi aplicado ou o motivo por não ter sido (ex.: falta de margem ou uso de --addition).
-
-Parâmetros e Uso:
-----------------
-Abaixo estão todos os parâmetros disponíveis, suas descrições e exemplos práticos.
-
 Exemplos Práticos:
 -----------------
 1. Converter um único arquivo DSD para WAV com loudness normalizado:
    ./puretone.py /path/to/file.dsf
 
-2. Converter todos os arquivos DSD em um diretório para WavPack com ajuste automático de volume e acréscimo de 1dB:
-   ./puretone.py --format wavpack --volume auto --addition 1dB --parallel 4 /path/to/directory
+2. Converter todos os arquivos DSD em um diretório para WavPack com ajuste automático de volume e aumento de 2dB:
+   ./puretone.py --format wavpack --volume auto --volume-increase 2dB --parallel 4 /path/to/directory
 
 3. Converter arquivos com visualização de espectrograma e salvar logs:
    ./puretone.py --format flac --spectrogram 1920x1080 spectrogram combined --log output.log /path/to/directory
@@ -485,11 +487,11 @@ Exemplos Práticos:
     parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav', help="Formato de saída: 'wav', 'wavpack' ou 'flac'. Padrão: wav")
     parser.add_argument('--codec', help="Codec de áudio para saída WAV (ex.: pcm_s32le). Padrão: pcm_s24le")
     parser.add_argument('--sample-rate', type=int, help="Taxa de amostragem em Hz (ex.: 88200). Padrão: 176400")
-    parser.add_argument('--map-metadata', help="Mapeamento de metadados (ex.: 0 para manter). Padrão: 0")
     parser.add_argument('--loudnorm-I', help="Alvo de loudness integrado em LUFS. Padrão: -14")
     parser.add_argument('--loudnorm-TP', help="Limite de pico verdadeiro em dBTP. Padrão: -1")
     parser.add_argument('--loudnorm-LRA', help="Faixa de loudness em LU. Padrão: 20")
     parser.add_argument('--volume', help="Ajuste de volume: valor fixo (ex.: '2.5dB'), 'auto' ou 'analysis'. Padrão: None")
+    parser.add_argument('--volume-increase', default='1dB', help="Aumento de volume opcional (ex.: '1dB') a ser aplicado quando --volume auto e todas as faixas têm margem. Padrão: 1dB")
     parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB') a ser aplicado apenas com --volume auto. Valores negativos não permitidos. Padrão: 0dB")
     parser.add_argument('--headroom-limit', type=float, help="Volume máximo permitido em dB. Padrão: -0.5")
     parser.add_argument('--resampler', help="Motor de resampling (ex.: soxr). Padrão: soxr")
@@ -508,12 +510,18 @@ Exemplos Práticos:
     if args.debug:
         logger.setLevel(logging.DEBUG)
 
-    CONFIG['OUTPUT_FORMAT'] = args.format
+    CONFIG.OUTPUT_FORMAT = args.format
     if args.volume:
         if args.volume not in ('auto', 'analysis') and not validate_volume(args.volume):
             logger.error("Volume deve ser 'auto', 'analysis', ou no formato 'XdB' (ex.: '3dB', '-2.5dB')")
             sys.exit(1)
-        CONFIG['VOLUME'] = args.volume
+        CONFIG.VOLUME = args.volume
+
+    if args.volume_increase:
+        if not validate_volume(args.volume_increase):
+            logger.error("volume-increase deve estar no formato 'XdB' (ex.: '1dB', '3.5dB')")
+            sys.exit(1)
+        CONFIG.VOLUME_INCREASE = args.volume_increase
 
     if args.addition:
         if not validate_addition(args.addition):
@@ -522,39 +530,42 @@ Exemplos Práticos:
         if args.volume != 'auto':
             logger.error("--addition só pode ser usado com --volume auto")
             sys.exit(1)
-        CONFIG['ADDITION'] = args.addition
+        CONFIG.ADDITION = args.addition
 
-    if args.codec: CONFIG['ACODEC'] = args.codec
-    if args.sample_rate: CONFIG['AR'] = str(args.sample_rate)
-    if args.map_metadata: CONFIG['MAP_METADATA'] = args.map_metadata
-    if args.loudnorm_I: CONFIG['LOUDNORM_I'] = args.loudnorm_I
-    if args.loudnorm_TP: CONFIG['LOUDNORM_TP'] = args.loudnorm_TP
-    if args.loudnorm_LRA: CONFIG['LOUDNORM_LRA'] = args.loudnorm_LRA
-    if args.headroom_limit is not None: CONFIG['HEADROOM_LIMIT'] = args.headroom_limit
-    if args.resampler: CONFIG['RESAMPLER'] = args.resampler
-    if args.precision: CONFIG['PRECISION'] = str(args.precision)
-    if args.cheby: CONFIG['CHEBY'] = args.cheby
+    if args.codec: CONFIG.ACODEC = args.codec
+    if args.sample_rate: CONFIG.AR = str(args.sample_rate)
+    if args.loudnorm_I: CONFIG.LOUDNORM_I = args.loudnorm_I
+    if args.loudnorm_TP: CONFIG.LOUDNORM_TP = args.loudnorm_TP
+    if args.loudnorm_LRA: CONFIG.LOUDNORM_LRA = args.loudnorm_LRA
+    if args.headroom_limit is not None: CONFIG.HEADROOM_LIMIT = args.headroom_limit
+    if args.resampler: CONFIG.RESAMPLER = args.resampler
+    if args.precision: CONFIG.PRECISION = str(args.precision)
+    if args.cheby: CONFIG.CHEBY = args.cheby
     if args.spectrogram:
-        CONFIG['ENABLE_VISUALIZATION'] = True
+        CONFIG.ENABLE_VISUALIZATION = True
         if args.spectrogram and validate_resolution(args.spectrogram[0]):
-            CONFIG['VISUALIZATION_SIZE'] = args.spectrogram[0]
+            CONFIG.VISUALIZATION_SIZE = args.spectrogram[0]
             if len(args.spectrogram) > 1:
-                CONFIG['VISUALIZATION_TYPE'] = args.spectrogram[1]
-                if len(args.spectrogram) > 2 and CONFIG['VISUALIZATION_TYPE'] == 'spectrogram':
-                    CONFIG['SPECTROGRAM_MODE'] = args.spectrogram[2]
+                CONFIG.VISUALIZATION_TYPE = args.spectrogram[1]
+                if len(args.spectrogram) > 2 and CONFIG.VISUALIZATION_TYPE == 'spectrogram':
+                    CONFIG.SPECTROGRAM_MODE = args.spectrogram[2]
     if args.compression_level:
-        if CONFIG['OUTPUT_FORMAT'] == 'wavpack' and 0 <= args.compression_level <= 6:
-            CONFIG['WAVPACK_COMPRESSION'] = str(args.compression_level)
-        elif CONFIG['OUTPUT_FORMAT'] == 'flac' and 0 <= args.compression_level <= 12:
-            CONFIG['FLAC_COMPRESSION'] = str(args.compression_level)
+        if CONFIG.OUTPUT_FORMAT == 'wavpack' and 0 <= args.compression_level <= 6:
+            CONFIG.WAVPACK_COMPRESSION = str(args.compression_level)
+        elif CONFIG.OUTPUT_FORMAT == 'flac' and 0 <= args.compression_level <= 12:
+            CONFIG.FLAC_COMPRESSION = str(args.compression_level)
         else:
-            logger.error(f"Nível de compressão inválido para {CONFIG['OUTPUT_FORMAT']}")
+            logger.error(f"Nível de compressão inválido para {CONFIG.OUTPUT_FORMAT}")
             sys.exit(1)
-    if args.skip_existing: CONFIG['SKIP_EXISTING'] = True
-    if args.parallel: CONFIG['PARALLEL_JOBS'] = max(1, args.parallel)
+    if args.skip_existing: CONFIG.SKIP_EXISTING = True
+    if args.parallel: CONFIG.PARALLEL_JOBS = max(1, args.parallel)
     log_file = args.log
 
-    for cmd in ['ffmpeg', 'ffprobe']:
+    # Verificar dependências
+    required_commands = ['ffmpeg', 'ffprobe']
+    if CONFIG.OUTPUT_FORMAT == 'flac':
+        required_commands.append('metaflac')
+    for cmd in required_commands:
         if shutil.which(cmd) is None:
             logger.error(f"{cmd} não encontrado. Por favor, instale-o.")
             sys.exit(1)
@@ -567,8 +578,6 @@ Exemplos Práticos:
     success = True
     all_volume_data = []
     all_volume_maps = []
-    all_applied_2db = []
-    all_insufficient_headroom_files = []
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
@@ -576,11 +585,9 @@ Exemplos Práticos:
     if path.is_file() and path.suffix == '.dsf':
         output_dir = os.path.join(path.parent, OUTPUT_DIRS[args.format])
         if args.volume == 'auto':
-            volume_map, volume_data, applied_2db, insufficient_headroom_files = calculate_volume_adjustment([str(path)], "", log_file)
+            volume_map, volume_data = calculate_volume_adjustment([str(path)], "", log_file)
             all_volume_data.extend(volume_data)
             all_volume_maps.append(volume_map)
-            all_applied_2db.append(applied_2db)
-            all_insufficient_headroom_files.append(insufficient_headroom_files)
             if volume_map:
                 success &= process_file(str(path), output_dir, volume_map[0][1], log_file)
             else:
@@ -595,21 +602,17 @@ Exemplos Práticos:
         if args.volume == 'auto':
             if files:
                 logger.info(f"Processando diretório: {path}")
-                volume_map, volume_data, applied_2db, insufficient_headroom_files = calculate_volume_adjustment(files, "", log_file)
+                volume_map, volume_data = calculate_volume_adjustment(files, "", log_file)
                 all_volume_data.extend(volume_data)
                 all_volume_maps.append(volume_map)
-                all_applied_2db.append(applied_2db)
-                all_insufficient_headroom_files.append(insufficient_headroom_files)
                 success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if subdirs:
                 logger.info(f"Processando subdiretórios em {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
-                    volume_map, volume_data, applied_2db, insufficient_headroom_files = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
+                    volume_map, volume_data = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
                     all_volume_data.extend(volume_data)
                     all_volume_maps.append(volume_map)
-                    all_applied_2db.append(applied_2db)
-                    all_insufficient_headroom_files.append(insufficient_headroom_files)
                     success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if not files and not subdirs:
                 logger.error(f"Nenhum arquivo .dsf encontrado em {path} ou seus subdiretórios")
@@ -639,33 +642,6 @@ Exemplos Práticos:
 
     if all_volume_data and args.volume == 'auto':
         print_volume_summary(all_volume_data, all_volume_maps, log_file)
-
-    # Adicionar logs relacionados ao ajuste de 2dB
-    for applied_2db, insufficient_headroom_files in zip(all_applied_2db, all_insufficient_headroom_files):
-        if CONFIG['VOLUME'] == 'auto':
-            if CONFIG['ADDITION'] != '0dB':
-                logger.info(f"Skipped 2dB increase: --addition parameter specified (value: {CONFIG['ADDITION']}).")
-                if log_file:
-                    with open(log_file, 'a') as f:
-                        f.write(f"Skipped 2dB increase: --addition parameter specified (value: {CONFIG['ADDITION']}).\n")
-            elif applied_2db:
-                logger.info("Applied 2dB increase to all tracks: all had sufficient headroom.")
-                if log_file:
-                    with open(log_file, 'a') as f:
-                        f.write("Applied 2dB increase to all tracks: all had sufficient headroom.\n")
-            elif insufficient_headroom_files:
-                msg = "Could not apply 2dB increase. Insufficient headroom in: " + ", ".join(
-                    [f"{file} (WAV Max Volume: {volume:.1f}dB)" for file, volume in insufficient_headroom_files]
-                )
-                logger.info(msg)
-                if log_file:
-                    with open(log_file, 'a') as f:
-                        f.write(msg + "\n")
-
-    if log_file:
-        with open(log_file, 'a') as f:
-            f.write(f"{'Processo concluído com sucesso!' if success else 'Processo concluído com erros!'}\n")
-            f.write(f"Tempo decorrido: {elapsed_time} segundos\n")
 
     for temp_file in TEMP_FILES.values():
         if os.path.exists(temp_file):
