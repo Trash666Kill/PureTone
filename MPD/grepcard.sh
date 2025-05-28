@@ -1,0 +1,1 @@
+card_number=$(cat /proc/asound/cards | grep '\[K11' | awk '{print $1}')
