@@ -1,6 +1,13 @@
 #!/bin/bash
 
-card_number=$(cat /proc/asound/cards | grep '\[K11' | awk '{print $1}')
+grep_card() {
+    #Extract the sound card number associated with the FiiO K11 device from the file /proc/asound/cards
+    CARD_NUMBER=$(cat /proc/asound/cards | grep '\[K11' | awk '{print $1}')
+
+    #Replace the line 'device "plughw:..."' in the /etc/mpd.conf file with 'device "plughw:$CARD_NUMBER,0"'
+    sed -i 's/device\s*"plughw:[^"]*"/device "plughw:'"$CARD_NUMBER"',0"/g' /etc/mpd.conf
+}
+
 
 # Restart mpd service
 restart_mpd() {
