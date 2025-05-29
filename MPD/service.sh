@@ -1,15 +1,24 @@
 #!/bin/bash
 
 grep_card() {
-    #Extract the sound card number associated with the FiiO K11 device from the file /proc/asound/cards
-    CARD_NUMBER=$(cat /proc/asound/cards | grep '\[K11' | awk '{print $1}')
+    # Define the pattern to search for the device
+    DEVICE_PATTERN="[K11"
 
-    #Replace the line 'device "plughw:..."' in the /etc/mpd.conf file with 'device "plughw:$CARD_NUMBER,0"'
-    sed -i 's/device\s*"plughw:[^"]*"/device "plughw:'"$CARD_NUMBER"',0"/g' /etc/mpd.conf
+    # Extract the sound card number associated with the device from /proc/asound/cards
+    CARD_NUMBER=$(cat /proc/asound/cards | grep "$DEVICE_PATTERN" | awk '{print $1}')
+
+    # Check if CARD_NUMBER is not empty before editing the file
+    if [ -n "$CARD_NUMBER" ]; then
+        # Replace the line 'device "plughw:..."' in /etc/mpd.conf with 'device "plughw:$CARD_NUMBER,0"'
+        sed -i 's/device\s*"plughw:[^"]*"/device "plughw:'"$CARD_NUMBER"',0"/g' /etc/mpd.conf
+    else
+        # Print error message if DEVICE_PATTERN is not found
+        printf "\e[31m*\e[0m ERROR: FAILED TO FIND DEVICE MATCHING PATTERN %s\n" "$DEVICE_PATTERN"
+    fi
 }
 
-# Restart mpd service
 restart_mpd() {
+    # Restart mpd service
     local SERVICE=mpd
     systemctl restart "$SERVICE"
     if [[ $? -ne 0 ]]; then
