@@ -8,7 +8,6 @@ grep_card() {
     sed -i 's/device\s*"plughw:[^"]*"/device "plughw:'"$CARD_NUMBER"',0"/g' /etc/mpd.conf
 }
 
-
 # Restart mpd service
 restart_mpd() {
     local SERVICE=mpd
@@ -18,3 +17,12 @@ restart_mpd() {
         exit 1
     fi
 }
+
+# Main function to orchestrate the setup
+main() {
+    grep_card
+    restart_mpd
+}
+
+# Execute main function
+main
