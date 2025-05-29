@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# - Description: Configures the MPD (Music Player Daemon) sound device and restarts the MPD service.
+# - Defines a function to search for a sound card matching the pattern "[K11" in /proc/asound/cards.
+# - Updates the MPD configuration file (/etc/mpd.conf) with the detected sound card number.
+# - Defines a function to restart the MPD service, exiting on failure if the restart is unsuccessful.
+# - The main function orchestrates the process by calling the card detection and service restart functions.
+# - If the sound card is not found, an error message is displayed, but the script continues to attempt restarting MPD.
+
 grep_card() {
     # Define the pattern to search for the device
     DEVICE_PATTERN="[K11"
