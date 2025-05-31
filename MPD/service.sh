@@ -9,7 +9,7 @@
 
 grep_card() {
     # Define the pattern to search for the device
-    DEVICE_PATTERN="[K11"
+    DEVICE_PATTERN="\[K11"
 
     # Extract the sound card number associated with the device from /proc/asound/cards
     CARD_NUMBER=$(cat /proc/asound/cards | grep "$DEVICE_PATTERN" | awk '{print $1}')
@@ -34,10 +34,21 @@ restart_mpd() {
     fi
 }
 
+restart_mympd() {
+    # Restart mympd service
+    local SERVICE=mympd
+    systemctl restart "$SERVICE"
+    if [[ $? -ne 0 ]]; then
+        printf "\e[31m*\e[0m Error: Failed to restart $SERVICE.\n"
+        exit 1
+    fi
+}
+
 # Main function to orchestrate the setup
 main() {
     grep_card
     restart_mpd
+    restart_mympd
 }
 
 # Execute main function
