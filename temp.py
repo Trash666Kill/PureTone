@@ -8,7 +8,7 @@ import re
 import sys
 import signal
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from typing import List, Tuple, Optional
 import shutil
 import termios
@@ -200,7 +200,8 @@ def calculate_volume_adjustment(files: List[str], subdir: str, log_file: Optiona
 
     return final_volumes, volume_adjustments
 
-def process_file(input_file: str, output_dir: str, volume: str = None, log_file: Optional[str] = None) -> bool:
+def process_file(args_tuple: Tuple[str, str, str, Optional[str]]) -> bool:
+    input_file, output_dir, volume, log_file = args_tuple
     logger.debug(f"Processing file: {input_file}")
     base_name = Path(input_file).stem
     intermediate_wav = normalize_path(os.path.join(output_dir, f"{base_name}_intermediate.wav"))
@@ -368,13 +369,11 @@ def resolve_path(path_str: str) -> Path:
     return Path(os.path.join(os.getcwd(), path_str))
 
 def process_files_in_parallel(files: List[str], output_dir: str, volume_map: List[Tuple[str, str]], log_file: Optional[str] = None) -> bool:
-    logger.info(f"Starting parallel processing with {CONFIG.PARALLEL_JOBS} workers for {len(files)} files")
-    with ThreadPoolExecutor(max_workers=CONFIG.PARALLEL_JOBS) as executor:
-        results = []
-        for file, volume in volume_map:
-            results.append(executor.submit(process_file, file, output_dir, volume, log_file))
-        outcomes = [future.result() for future in results]
-    success = all(outcomes)
+    logger.info(f"Starting parallel processing with {CONFIG.PARALLEL_JOBS} processes for {len(files)} files")
+    args_list = [(file, output_dir, volume, log_file) for file, volume in volume_map]
+    with ProcessPoolExecutor(max_workers=CONFIG.PARALLEL_JOBS) as executor:
+        results = list(executor.map(process_file, args_list))
+    success = all(results)
     logger.info(f"Completed parallel processing for {len(files)} files. Success: {success}")
     return success
 
@@ -589,11 +588,11 @@ Exemplos Práticos:
             all_volume_data.extend(volume_data)
             all_volume_maps.append(volume_map)
             if volume_map:
-                success &= process_file(str(path), output_dir, volume_map[0][1], log_file)
+                success &= process_file((str(path), output_dir, volume_map[0][1], log_file))
             else:
                 success = False
         else:
-            success &= process_file(str(path), output_dir, args.volume, log_file)
+            success &= process_file((str(path), output_dir, args.volume, log_file))
     elif path.is_dir():
         os.chdir(path)
         files = [str(f) for f in Path('.').glob('*.dsf')]
