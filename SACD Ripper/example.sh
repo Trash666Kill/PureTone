@@ -1,1 +1,1 @@
-sacd_extract --2ch-tracks --output-dsf -i Firebird.iso --output-dir-conc /home/sysop/Temp
+sacd_extract --2ch-tracks --output-dsf -i /mnt/Services/Puretone/Download/0/Stravinsky.iso --output-dir-conc /mnt/Services/Puretone/Music/0/Analyzing/
