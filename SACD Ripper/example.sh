@@ -1,0 +1,1 @@
+sacd_extract --2ch-tracks --output-dsf -i Firebird.iso --output-dir-conc /home/sysop/Temp
