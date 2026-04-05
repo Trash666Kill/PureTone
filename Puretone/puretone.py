@@ -15,12 +15,12 @@ import shutil
 import termios
 import tty
 
-# Salvar o estado do terminal no início
+# Save terminal state at startup
 ORIGINAL_TERMINAL_STATE = None
 if sys.stdin.isatty():
     ORIGINAL_TERMINAL_STATE = termios.tcgetattr(sys.stdin)
 
-# Configuração de logging
+# Logging configuration
 START_TIME = time.time()
 logging.basicConfig(
     format='[%(relativeCreated)d] [%(levelname)s] %(message)s',
@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('puretone')
 
-# Classe de configuração
+# Configuration class
 class PureToneConfig:
     def __init__(self):
         self.ACODEC = 'pcm_s24le'
@@ -59,19 +59,19 @@ class PureToneConfig:
 
 CONFIG = PureToneConfig()
 
-# Diretórios de saída por formato
+# Output directories by format
 OUTPUT_DIRS = {'wav': 'wv', 'wavpack': 'wvpk', 'flac': 'flac', 'dsf': 'dsf'}
 
-# Extensões de arquivo por formato
+# File extensions by format
 FORMAT_EXTENSIONS = {'wav': 'wav', 'wavpack': 'wv', 'flac': 'flac'}
 
-# Arquivos temporários
+# Temporary files
 TEMP_FILES = {
     'PEAK_LOG': f"/tmp/puretone_{os.getpid()}_peaks.log",
     'VOLUME_LOG': f"/tmp/puretone_{os.getpid()}_volume.log",
 }
 
-# Diretório temporário para sacd_extract (cfg + binário embutido)
+# Temporary directory for sacd_extract (cfg + embedded binary)
 SACD_TEMP_DIR = f"/tmp/puretone_{os.getpid()}_sacd"
 
 def run_command(cmd: List[str], capture_output: bool = True, cwd: Optional[str] = None) -> Tuple[str, str, int]:
@@ -351,18 +351,18 @@ def process_file(input_file: str, output_dir: str, volume: str = None, log_file:
 # ---------------------------------------------------------------------------
 
 def locate_sacd_extract() -> Optional[str]:
-    """Localiza o binário sacd_extract: primeiro embutido via Nuitka, depois no PATH."""
-    # Binário embutido via Nuitka (--include-data-files=bin/sacd_extract=bin/sacd_extract)
+    """Locate the sacd_extract binary: first checks the embedded Nuitka path, then the system PATH."""
+    # Embedded binary via Nuitka (--include-data-files=bin/sacd_extract=bin/sacd_extract)
     embedded = os.path.join(os.path.dirname(__file__), 'bin', 'sacd_extract')
     if os.path.isfile(embedded):
-        # Garante permissão de execução (Nuitka não preserva bits de execução)
+        # Ensure execute permission (Nuitka does not preserve execute bits)
         current_mode = os.stat(embedded).st_mode
         if not (current_mode & stat.S_IXUSR):
             os.chmod(embedded, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             logger.debug(f"Applied +x to embedded sacd_extract: {embedded}")
         return embedded
 
-    # Fallback: PATH do sistema
+    # Fallback: system PATH
     system_bin = shutil.which('sacd_extract')
     if system_bin:
         logger.debug(f"Using system sacd_extract: {system_bin}")
@@ -371,7 +371,7 @@ def locate_sacd_extract() -> Optional[str]:
     return None
 
 def prepare_sacd_cfg() -> str:
-    """Cria o diretório temporário e o sacd_extract.cfg necessário para execução."""
+    """Create the temporary directory and sacd_extract.cfg required for execution."""
     os.makedirs(SACD_TEMP_DIR, exist_ok=True)
     cfg_path = os.path.join(SACD_TEMP_DIR, 'sacd_extract.cfg')
     with open(cfg_path, 'w') as f:
@@ -381,9 +381,9 @@ def prepare_sacd_cfg() -> str:
 
 def extract_iso(iso_path: str, sacd_bin: str, output_dir: Optional[str] = None) -> Optional[str]:
     """
-    Extrai os DSFs de uma ISO SACD para <output_dir>/dsf/.
-    Se output_dir nao for fornecido, usa o diretorio da ISO.
-    Retorna o caminho do diretório dsf/ em caso de sucesso, None em caso de falha.
+    Extract DSFs from a SACD ISO to <output_dir>/dsf/.
+    If output_dir is not provided, uses the ISO's own directory.
+    Returns the dsf/ directory path on success, None on failure.
     """
     iso_path = os.path.abspath(iso_path)
     base_dir = os.path.abspath(output_dir) if output_dir else os.path.dirname(iso_path)
@@ -402,7 +402,7 @@ def extract_iso(iso_path: str, sacd_bin: str, output_dir: Optional[str] = None) 
         '--output-dir-conc', dsf_dir,
     ]
 
-    # Em modo debug, deixa sacd_extract escrever direto no terminal
+    # In debug mode, let sacd_extract write directly to the terminal
     capture = not logger.isEnabledFor(logging.DEBUG)
     stdout, stderr, rc = run_command(cmd, capture_output=capture, cwd=cfg_cwd)
 
@@ -410,20 +410,20 @@ def extract_iso(iso_path: str, sacd_bin: str, output_dir: Optional[str] = None) 
         logger.error(f"sacd_extract failed (rc={rc}):\n{stderr}")
         return None
 
-    # sacd_extract cria subdiretório com nome do álbum dentro de dsf_dir
-    # ex: dsf/Exodus/*.dsf — busca recursivamente
+    # sacd_extract creates a subdirectory named after the album inside dsf_dir
+    # e.g.: dsf/Exodus/*.dsf — search recursively
     dsf_files = list(Path(dsf_dir).rglob('*.dsf'))
     if not dsf_files:
         logger.error(f"sacd_extract completed but no .dsf files found in {dsf_dir}")
         return None
 
-    # Retorna o diretório real onde os DSFs estão (subdiretório do álbum)
+    # Return the actual directory where DSFs reside (album subdirectory)
     actual_dsf_dir = str(dsf_files[0].parent)
     logger.info(f"Extracted {len(dsf_files)} DSF file(s) to {actual_dsf_dir}")
     return actual_dsf_dir
 
 def cleanup_dsf_dir(dsf_dir: str):
-    """Remove o diretório dsf/ após a conversão, se --keep-dsf não estiver ativo."""
+    """Remove the dsf/ directory after conversion, unless --keep-dsf is active."""
     if CONFIG.KEEP_DSF:
         logger.info(f"Keeping DSF directory: {dsf_dir}")
         return
@@ -445,7 +445,7 @@ def cleanup(signum=None, frame=None):
                 logger.debug(f"Removed temporary file: {temp_file}")
             except Exception as e:
                 logger.error(f"Failed to remove {temp_file}: {e}")
-    # Limpa diretório temporário do sacd_extract
+    # Clean up sacd_extract temporary directory
     if os.path.exists(SACD_TEMP_DIR):
         try:
             shutil.rmtree(SACD_TEMP_DIR)
@@ -485,8 +485,8 @@ def process_files_in_parallel(files: List[str], output_dir: str, volume_map: Lis
 
 def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[str, str]]], log_file: Optional[str] = None):
     logger.info("\n=== Volume Adjustment Summary ===")
-    col_widths = [40, 15, 20, 20]
-    logger.info(f"{'File':<40} {'y (dB) ffmpeg':^15} {'WAV Max Volume (dB)':^20} {'Applied Volume (dB)':^20}")
+    col_widths = [60, 15, 20, 20]
+    logger.info(f"{'File':<60} {'y (dB) ffmpeg':^15} {'WAV Max Volume (dB)':^20} {'Applied Volume (dB)':^20}")
     logger.info("-" * sum(col_widths))
 
     volume_dict = {}
@@ -495,7 +495,7 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
 
     for entry in volume_data:
         applied_volume = volume_dict.get(entry['file'], "N/A")
-        logger.info(f"{entry['file'][:38]:<40} {entry['y']:^15.1f} {entry['wav_max_volume']:^20.1f} {applied_volume:^20}")
+        logger.info(f"{entry['file'][:58]:<60} {entry['y']:^15.1f} {entry['wav_max_volume']:^20.1f} {applied_volume:^20}")
     logger.info("-" * sum(col_widths))
 
     if CONFIG.ADDITION != '0dB':
@@ -504,28 +504,28 @@ def print_volume_summary(volume_data: List[dict], volume_maps: List[List[Tuple[s
     if log_file:
         with open(log_file, 'a') as f:
             f.write("\n=== Volume Adjustment Summary ===\n")
-            f.write(f"{'File':<40} {'y (dB) ffmpeg':^15} {'WAV Max Volume (dB)':^20} {'Applied Volume (dB)':^20}\n")
+            f.write(f"{'File':<60} {'y (dB) ffmpeg':^15} {'WAV Max Volume (dB)':^20} {'Applied Volume (dB)':^20}\n")
             f.write("-" * sum(col_widths) + "\n")
             for entry in volume_data:
                 applied_volume = volume_dict.get(entry['file'], "N/A")
-                f.write(f"{entry['file'][:38]:<40} {entry['y']:^15.1f} {entry['wav_max_volume']:^20.1f} {applied_volume:^20}\n")
+                f.write(f"{entry['file'][:58]:<60} {entry['y']:^15.1f} {entry['wav_max_volume']:^20.1f} {applied_volume:^20}\n")
             f.write("-" * sum(col_widths) + "\n")
             if CONFIG.ADDITION != '0dB':
                 f.write(f"Applied additional volume adjustment: {CONFIG.ADDITION}\n")
 
 def process_dsf_directory(dsf_dir: str, args, log_file: Optional[str]) -> bool:
-    """Processa um diretório de DSFs — reutilizado tanto pelo fluxo ISO quanto pelo fluxo direto."""
+    """Process a directory of DSF files — used by both the ISO flow and the direct DSF flow."""
     files = [str(f) for f in Path(dsf_dir).glob('*.dsf')]
     if not files:
-        logger.error(f"Nenhum arquivo .dsf encontrado em {dsf_dir}")
+        logger.error(f"No .dsf files found in {dsf_dir}")
         return False
 
-    # Os arquivos convertidos vao para o mesmo nivel de dsf/, subindo dois niveis:
-    # dsf/Exodus/ -> subir para dsf/ -> subir para base -> flac/
-    # Se dsf_dir for dsf/Exodus, base sera o dir que contém dsf/
+    # Converted files go to the same level as dsf/, going up two levels:
+    # dsf/Exodus/ -> up to dsf/ -> up to base -> flac/
+    # If dsf_dir is dsf/Exodus, base is the directory containing dsf/
     dsf_parent = os.path.dirname(dsf_dir)  # dsf/
     base_dir = os.path.dirname(dsf_parent)  # diretorio raiz do output
-    # Se dsf_dir já for o topo (sem subdir de album), sobe apenas um nivel
+    # If dsf_dir is already the top level (no album subdir), go up only one level
     if os.path.basename(dsf_parent) != OUTPUT_DIRS['dsf']:
         base_dir = dsf_parent
     output_dir = os.path.join(base_dir, OUTPUT_DIRS[args.format])
@@ -549,77 +549,78 @@ def process_dsf_directory(dsf_dir: str, args, log_file: Optional[str]) -> bool:
 
 def main():
     description = """
-PureTone - Conversor de DSD para Áudio de Alta Qualidade
+PureTone - DSD to High-Quality Audio Converter
 
-Descrição:
-----------
-PureTone é um script Python que converte arquivos DSD (.dsf) para formatos de áudio de alta qualidade
-(WAV, WavPack, FLAC), com opções avançadas de processamento de áudio, incluindo normalização de volume,
-resampling e visualização (espectrogramas ou formas de onda). Suporta extração direta de ISOs SACD via
-sacd_extract (embutido ou instalado no sistema). Suporta processamento paralelo e logs detalhados.
+Description:
+------------
+PureTone is a Python script that converts DSD files (.dsf) to high-quality audio formats
+(WAV, WavPack, FLAC), with advanced audio processing options including volume normalization,
+resampling, and visualization (spectrograms or waveforms). Supports direct extraction from
+SACD ISOs via sacd_extract (embedded or system-installed). Supports parallel processing
+and detailed logging.
 
-Fluxo Detalhado de Funcionamento:
+Detailed Workflow:
+------------------
+1. Dependency Check: Verifies that ffmpeg and ffprobe are installed.
+2. Path Analysis: Accepts a .dsf file, .iso file, or directory as input.
+   - .iso: extracts DSFs via sacd_extract, then processes normally.
+   - .dsf: processes the file directly.
+   - directory: recursively processes all .dsf files found.
+3. ISO Extraction (if input is .iso):
+   - Locates sacd_extract (embedded or in PATH).
+   - Generates sacd_extract.cfg in a temporary directory.
+   - Extracts DSFs to <output_dir>/dsf/ using --2ch-tracks --output-dsf.
+   - If --extract-only, stops after extraction.
+4. Volume Analysis (if --volume auto): same as the standard flow.
+5. File Processing: same as the standard flow.
+6. Cleanup: removes dsf/ unless --keep-dsf is active.
+
+Directory Structure (ISO input):
 ---------------------------------
-1. Validação de Dependências: Verifica se ffmpeg e ffprobe estão instalados.
-2. Análise de Caminho: Aceita um arquivo .dsf, .iso ou diretório como entrada.
-   - .iso: extrai os DSFs via sacd_extract, depois processa normalmente.
-   - .dsf: processa o arquivo diretamente.
-   - diretório: processa recursivamente todos os .dsf encontrados.
-3. Extração ISO (se input for .iso):
-   - Localiza sacd_extract (embutido ou no PATH).
-   - Gera sacd_extract.cfg em diretório temporário.
-   - Extrai DSFs para <dir_da_iso>/dsf/ com --2ch-tracks --output-dsf.
-   - Se --extract-only, encerra após a extração.
-4. Análise de Volume (se --volume auto): igual ao fluxo existente.
-5. Processamento de Arquivos: igual ao fluxo existente.
-6. Limpeza: remove dsf/ se --keep-dsf não estiver ativo.
-
-Estrutura de Diretórios (input ISO):
--------------------------------------
-<dir_da_iso>/
-└── dsf/          # DSFs extraídos (removidos ao final salvo --keep-dsf)
-└── wv/           # ou wvpk/ ou flac/, conforme --format
+<output_dir>/
+└── dsf/          # Extracted DSFs (removed at the end unless --keep-dsf)
+└── wv/           # or wvpk/ or flac/, depending on --format
     └── *.wav/wv/flac
 
-Valores Padrão:
----------------
-- Formato de saída (--format): wav
-- Codec de áudio (--codec): pcm_s24le
-- Taxa de amostragem (--sample-rate): 176400 Hz
-- Alvo de loudness integrado (--loudnorm-I): -14 LUFS
-- Pico verdadeiro (--loudnorm-TP): -1 dBTP
-- Faixa de loudness (--loudnorm-LRA): 20 LU
-- Ajuste de volume (--volume): None (usa loudnorm por padrão)
-- Aumento de volume opcional (--volume-increase): 1dB
-- Acréscimo adicional (--addition): 0dB
-- Limite de headroom (--headroom-limit): -0.5 dB
+Defaults:
+---------
+- Output format (--format): wav
+- Audio codec (--codec): pcm_s24le
+- Sample rate (--sample-rate): 176400 Hz
+- Integrated loudness target (--loudnorm-I): -14 LUFS
+- True peak limit (--loudnorm-TP): -1 dBTP
+- Loudness range (--loudnorm-LRA): 20 LU
+- Volume adjustment (--volume): None (uses loudnorm by default)
+- Optional volume increase (--volume-increase): 1dB
+- Additional adjustment (--addition): 0dB
+- Headroom limit (--headroom-limit): -0.5 dB
 - Resampler (--resampler): soxr
-- Precisão do resampler (--precision): 28
-- Modo Chebyshev (--cheby): 1
-- Visualização (--spectrogram): Desabilitado
-- Nível de compressão (--compression-level): 0
-- Pular existentes (--skip-existing): False
-- Número de tarefas paralelas (--parallel): 2
-- Arquivo de log (--log): None
-- Manter DSFs extraídos (--keep-dsf): False
-- Apenas extrair DSFs (--extract-only): False
-- Modo depuração (--debug): False
+- Resampler precision (--precision): 28
+- Chebyshev mode (--cheby): 1
+- Visualization (--spectrogram): Disabled
+- Compression level (--compression-level): 0
+- Skip existing (--skip-existing): False
+- Parallel jobs (--parallel): 2
+- Log file (--log): None
+- Keep extracted DSFs (--keep-dsf): False
+- Extract DSFs only (--extract-only): False
+- Debug mode (--debug): False
 
-Exemplos Práticos:
------------------
-1. Converter ISO SACD para FLAC com ajuste automático de volume:
+Practical Examples:
+-------------------
+1. Convert a SACD ISO to FLAC with automatic volume adjustment:
    ./puretone --format flac --compression-level 12 --volume auto --volume-increase 2dB /path/to/album.iso
 
-2. Apenas extrair DSFs de uma ISO sem converter:
+2. Extract DSFs from an ISO without converting:
    ./puretone --extract-only /path/to/album.iso
 
-3. Converter ISO e manter os DSFs extraídos:
+3. Convert ISO and keep the extracted DSFs:
    ./puretone --format flac --keep-dsf /path/to/album.iso
 
-4. Converter todos os arquivos DSF em um diretório para WavPack:
+4. Convert all DSF files in a directory to WavPack:
    ./puretone --format wavpack --volume auto --parallel 4 /path/to/directory
 
-5. Converter um único arquivo DSF para WAV com loudness normalizado:
+5. Convert a single DSF file to WAV with loudness normalization:
    ./puretone /path/to/file.dsf
 """
 
@@ -629,31 +630,31 @@ Exemplos Práticos:
         add_help=False
     )
 
-    parser.add_argument('-h', '--help', action='help', help="Mostra esta mensagem de ajuda e sai.")
-    parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav', help="Formato de saída: 'wav', 'wavpack' ou 'flac'. Padrão: wav")
-    parser.add_argument('--codec', help="Codec de áudio para saída WAV (ex.: pcm_s32le). Padrão: pcm_s24le")
-    parser.add_argument('--sample-rate', type=int, help="Taxa de amostragem em Hz (ex.: 88200). Padrão: 176400")
-    parser.add_argument('--loudnorm-I', help="Alvo de loudness integrado em LUFS. Padrão: -14")
-    parser.add_argument('--loudnorm-TP', help="Limite de pico verdadeiro em dBTP. Padrão: -1")
-    parser.add_argument('--loudnorm-LRA', help="Faixa de loudness em LU. Padrão: 20")
-    parser.add_argument('--volume', help="Ajuste de volume: valor fixo (ex.: '2.5dB'), 'auto' ou 'analysis'. Padrão: None")
-    parser.add_argument('--volume-increase', default='1dB', help="Aumento de volume opcional (ex.: '1dB') a ser aplicado quando --volume auto e todas as faixas têm margem. Padrão: 1dB")
-    parser.add_argument('--addition', help="Ajuste adicional de volume (ex.: '1dB') a ser aplicado apenas com --volume auto. Valores negativos não permitidos. Padrão: 0dB")
-    parser.add_argument('--headroom-limit', type=float, help="Volume máximo permitido em dB. Padrão: -0.5")
-    parser.add_argument('--resampler', help="Motor de resampling (ex.: soxr). Padrão: soxr")
-    parser.add_argument('--precision', type=int, help="Precisão do resampler (ex.: 20-28). Padrão: 28")
-    parser.add_argument('--cheby', choices=['0', '1'], help="Ativa modo Chebyshev para resampler SoX. Padrão: 1")
-    parser.add_argument('--spectrogram', nargs='*', help="Ativa visualização: '<width>x<height> [type [mode]]'. Padrão: desabilitado")
-    parser.add_argument('--compression-level', type=int, help="Nível de compressão: 0-6 para WavPack, 0-12 para FLAC. Padrão: 0")
-    parser.add_argument('--skip-existing', action='store_true', help="Pula se o arquivo de saída já existe. Padrão: False")
-    parser.add_argument('--parallel', type=int, help="Número de tarefas paralelas. Padrão: 2")
-    parser.add_argument('--log', help="Arquivo para salvar resultados da análise. Padrão: None")
-    parser.add_argument('--debug', action='store_true', help="Ativa logs de depuração. Padrão: False")
-    # Argumentos SACD
-    parser.add_argument('--keep-dsf', action='store_true', help="Mantém os arquivos .dsf extraídos da ISO após a conversão. Padrão: False")
-    parser.add_argument('--extract-only', action='store_true', help="Apenas extrai os DSFs da ISO sem converter. Implica --keep-dsf. Padrão: False")
-    parser.add_argument('--output-dir', help="Diretório de destino para DSFs extraídos e arquivos convertidos (apenas para input .iso). Padrão: mesmo diretório da ISO")
-    parser.add_argument('path', help="Caminho para um arquivo .dsf, .iso ou diretório")
+    parser.add_argument('-h', '--help', action='help', help="Show this help message and exit.")
+    parser.add_argument('--format', choices=['wav', 'wavpack', 'flac'], default='wav', help="Output format: 'wav', 'wavpack' or 'flac'. Default: wav")
+    parser.add_argument('--codec', help="Audio codec for WAV output (e.g. pcm_s32le). Default: pcm_s24le")
+    parser.add_argument('--sample-rate', type=int, help="Sample rate in Hz (e.g. 88200). Default: 176400")
+    parser.add_argument('--loudnorm-I', help="Integrated loudness target in LUFS. Default: -14")
+    parser.add_argument('--loudnorm-TP', help="True peak limit in dBTP. Default: -1")
+    parser.add_argument('--loudnorm-LRA', help="Loudness range in LU. Default: 20")
+    parser.add_argument('--volume', help="Volume adjustment: fixed value (e.g. '2.5dB'), 'auto' or 'analysis'. Default: None")
+    parser.add_argument('--volume-increase', default='1dB', help="Optional volume increase (e.g. '1dB') applied when --volume auto and all tracks have headroom. Default: 1dB")
+    parser.add_argument('--addition', help="Additional volume adjustment (e.g. '1dB'), only with --volume auto. Negative values not allowed. Default: 0dB")
+    parser.add_argument('--headroom-limit', type=float, help="Maximum allowed volume in dB. Default: -0.5")
+    parser.add_argument('--resampler', help="Resampling engine (e.g. soxr). Default: soxr")
+    parser.add_argument('--precision', type=int, help="Resampler precision (e.g. 20-28). Default: 28")
+    parser.add_argument('--cheby', choices=['0', '1'], help="Enable Chebyshev mode for SoX resampler. Default: 1")
+    parser.add_argument('--spectrogram', nargs='*', help="Enable visualization: '<width>x<height> [type [mode]]'. Default: disabled")
+    parser.add_argument('--compression-level', type=int, help="Compression level: 0-6 for WavPack, 0-12 for FLAC. Default: 0")
+    parser.add_argument('--skip-existing', action='store_true', help="Skip if the output file already exists. Default: False")
+    parser.add_argument('--parallel', type=int, help="Number of parallel jobs. Default: 2")
+    parser.add_argument('--log', help="File to save analysis results. Default: None")
+    parser.add_argument('--debug', action='store_true', help="Enable debug logging. Default: False")
+    # SACD arguments
+    parser.add_argument('--keep-dsf', action='store_true', help="Keep extracted .dsf files after conversion. Default: False")
+    parser.add_argument('--extract-only', action='store_true', help="Extract DSFs from the ISO without converting. Implies --keep-dsf. Default: False")
+    parser.add_argument('--output-dir', help="Output directory for extracted DSFs and converted files (ISO input only). Default: same directory as the ISO")
+    parser.add_argument('path', help="Path to a .dsf file, .iso file, or directory")
 
     args = parser.parse_args()
 
@@ -663,22 +664,22 @@ Exemplos Práticos:
     CONFIG.OUTPUT_FORMAT = args.format
     if args.volume:
         if args.volume not in ('auto', 'analysis') and not validate_volume(args.volume):
-            logger.error("Volume deve ser 'auto', 'analysis', ou no formato 'XdB' (ex.: '3dB', '-2.5dB')")
+            logger.error("Volume must be 'auto', 'analysis', or in the format 'XdB' (e.g. '3dB', '-2.5dB')")
             sys.exit(1)
         CONFIG.VOLUME = args.volume
 
     if args.volume_increase:
         if not validate_volume(args.volume_increase):
-            logger.error("volume-increase deve estar no formato 'XdB' (ex.: '1dB', '3.5dB')")
+            logger.error("volume-increase must be in the format 'XdB' (e.g. '1dB', '3.5dB')")
             sys.exit(1)
         CONFIG.VOLUME_INCREASE = args.volume_increase
 
     if args.addition:
         if not validate_addition(args.addition):
-            logger.error("Addition deve estar no formato 'XdB' (ex.: '1dB', '2.5dB') e não pode ser negativo")
+            logger.error("Addition must be in the format 'XdB' (e.g. '1dB', '2.5dB') and cannot be negative")
             sys.exit(1)
         if args.volume != 'auto':
-            logger.error("--addition só pode ser usado com --volume auto")
+            logger.error("--addition can only be used with --volume auto")
             sys.exit(1)
         CONFIG.ADDITION = args.addition
 
@@ -705,7 +706,7 @@ Exemplos Práticos:
         elif CONFIG.OUTPUT_FORMAT == 'flac' and 0 <= args.compression_level <= 12:
             CONFIG.FLAC_COMPRESSION = str(args.compression_level)
         else:
-            logger.error(f"Nível de compressão inválido para {CONFIG.OUTPUT_FORMAT}")
+            logger.error(f"Invalid compression level for {CONFIG.OUTPUT_FORMAT}")
             sys.exit(1)
     if args.skip_existing: CONFIG.SKIP_EXISTING = True
     if args.parallel: CONFIG.PARALLEL_JOBS = max(1, args.parallel)
@@ -713,13 +714,13 @@ Exemplos Práticos:
     CONFIG.EXTRACT_ONLY = args.extract_only
     log_file = args.log
 
-    # Verificar dependências base
+    # Verify base dependencies
     required_commands = ['ffmpeg', 'ffprobe']
     if CONFIG.OUTPUT_FORMAT == 'flac':
         required_commands.append('metaflac')
     for cmd in required_commands:
         if shutil.which(cmd) is None:
-            logger.error(f"{cmd} não encontrado. Por favor, instale-o.")
+            logger.error(f"{cmd} not found. Please install it.")
             sys.exit(1)
 
     for temp_file in TEMP_FILES.values():
@@ -735,28 +736,28 @@ Exemplos Práticos:
     signal.signal(signal.SIGTERM, cleanup)
 
     # ------------------------------------------------------------------
-    # Fluxo ISO SACD
+    # ISO SACD flow
     # ------------------------------------------------------------------
     if path.is_file() and path.suffix.lower() == '.iso':
         sacd_bin = locate_sacd_extract()
         if sacd_bin is None:
-            logger.error("sacd_extract não encontrado. Instale-o no sistema ou forneça o binário em bin/sacd_extract.")
+            logger.error("sacd_extract not found. Install it on the system or place the binary at bin/sacd_extract.")
             sys.exit(1)
 
         output_dir = os.path.abspath(args.output_dir) if args.output_dir else None
         dsf_dir = extract_iso(str(path), sacd_bin, output_dir)
         if dsf_dir is None:
-            logger.error("Falha na extração da ISO. Abortando.")
+            logger.error("ISO extraction failed. Aborting.")
             sys.exit(1)
 
         if CONFIG.EXTRACT_ONLY:
-            logger.info(f"--extract-only ativo. DSFs disponíveis em: {dsf_dir}")
+            logger.info(f"--extract-only active. DSFs available at: {dsf_dir}")
         else:
             success = process_dsf_directory(dsf_dir, args, log_file)
             cleanup_dsf_dir(dsf_dir)
 
     # ------------------------------------------------------------------
-    # Fluxo DSF único
+    # Single DSF file flow
     # ------------------------------------------------------------------
     elif path.is_file() and path.suffix == '.dsf':
         output_dir = os.path.join(path.parent, OUTPUT_DIRS[args.format])
@@ -772,7 +773,7 @@ Exemplos Práticos:
             success &= process_file(str(path), output_dir, args.volume, log_file)
 
     # ------------------------------------------------------------------
-    # Fluxo diretório
+    # Directory flow
     # ------------------------------------------------------------------
     elif path.is_dir():
         os.chdir(path)
@@ -781,13 +782,13 @@ Exemplos Práticos:
 
         if args.volume == 'auto':
             if files:
-                logger.info(f"Processando diretório: {path}")
+                logger.info(f"Processing directory: {path}")
                 volume_map, volume_data = calculate_volume_adjustment(files, "", log_file)
                 all_volume_data.extend(volume_data)
                 all_volume_maps.append(volume_map)
                 success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if subdirs:
-                logger.info(f"Processando subdiretórios em {path}: {', '.join(str(s) for s in subdirs)}")
+                logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     volume_map, volume_data = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
@@ -795,35 +796,35 @@ Exemplos Práticos:
                     all_volume_maps.append(volume_map)
                     success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume_map, log_file)
             if not files and not subdirs:
-                logger.error(f"Nenhum arquivo .dsf encontrado em {path} ou seus subdiretórios")
+                logger.error(f"No .dsf files found in {path} or its subdirectories")
                 success = False
         else:
             if files:
-                logger.info(f"Processando diretório: {path}")
+                logger.info(f"Processing directory: {path}")
                 success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), [(f, args.volume) for f in files], log_file)
             if subdirs:
-                logger.info(f"Processando subdiretórios em {path}: {', '.join(str(s) for s in subdirs)}")
+                logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), [(f, args.volume) for f in subdir_files], log_file)
             if not files and not subdirs:
-                logger.error(f"Nenhum arquivo .dsf encontrado em {path} ou seus subdiretórios")
+                logger.error(f"No .dsf files found in {path} or its subdirectories")
                 success = False
     else:
-        logger.error(f"Caminho inválido ou formato não suportado: {args.path}")
+        logger.error(f"Invalid path or unsupported format: {args.path}")
         sys.exit(1)
 
     elapsed_time = int(time.time() - start_time)
     if success:
-        logger.info("Processo concluído com sucesso!")
+        logger.info("Process completed successfully!")
     else:
-        logger.error("Processo concluído com erros!")
-    logger.info(f"Tempo decorrido: {elapsed_time} segundos")
+        logger.error("Process completed with errors!")
+    logger.info(f"Elapsed time: {elapsed_time} seconds")
 
     if all_volume_data and args.volume == 'auto':
         print_volume_summary(all_volume_data, all_volume_maps, log_file)
 
-    # Limpeza de temporários
+    # Clean up temporary files
     for temp_file in TEMP_FILES.values():
         if os.path.exists(temp_file):
             os.remove(temp_file)
