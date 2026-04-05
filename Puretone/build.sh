@@ -1,5 +1,5 @@
 # Dependências de sistema
-sudo apt install gcc ccache build-essential \
+sudo apt install gcc ccache build-essential patchelf \
     python3 python3-dev python3-pip \
     libpython3-dev python3-venv
 
@@ -12,6 +12,8 @@ pip install nuitka zstandard
 
 python3 -m nuitka \
     --onefile \
+    --product-name=puretone \
+    --product-version=1.0.0 \
     --onefile-tempdir-spec="{CACHE_DIR}/{PRODUCT}/{VERSION}" \
     --include-data-files=bin/sacd_extract=bin/sacd_extract \
     --output-filename=puretone \
