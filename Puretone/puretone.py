@@ -616,6 +616,14 @@ Defaults:
 - Resampler precision (--precision): 28
 - Chebyshev mode (--cheby): 1
 - Visualization (--spectrogram): Disabled
+  When enabled, defaults to 1920x1080 / spectrogram / combined
+  Usage: --spectrogram [resolution] [type] [mode] (all optional)
+  Examples: --spectrogram
+            --spectrogram waveform
+            --spectrogram spectrogram separate
+            --spectrogram 3840x2160
+            --spectrogram 3840x2160 waveform
+            --spectrogram 3840x2160 spectrogram separate
 - Compression level (--compression-level): 0
 - Skip existing (--skip-existing): False
 - Parallel jobs (--parallel): 2
@@ -662,7 +670,20 @@ Practical Examples:
     parser.add_argument('--resampler', help="Resampling engine (e.g. soxr). Default: soxr")
     parser.add_argument('--precision', type=int, help="Resampler precision (e.g. 20-28). Default: 28")
     parser.add_argument('--cheby', choices=['0', '1'], help="Enable Chebyshev mode for SoX resampler. Default: 1")
-    parser.add_argument('--spectrogram', nargs='*', help="Enable visualization: '<width>x<height> [type [mode]]'. Default: disabled")
+    parser.add_argument('--spectrogram', nargs='*', help=(
+        "Enable visualization. All arguments are optional and positional: "
+        "[resolution] [type] [mode]. "
+        "resolution: WxH (default: 1920x1080). "
+        "type: spectrogram or waveform (default: spectrogram). "
+        "mode: combined or separate, only for spectrogram type (default: combined). "
+        "Examples: "
+        "--spectrogram (all defaults); "
+        "--spectrogram waveform; "
+        "--spectrogram spectrogram separate; "
+        "--spectrogram 3840x2160; "
+        "--spectrogram 3840x2160 waveform; "
+        "--spectrogram 3840x2160 spectrogram separate"
+    ))
     parser.add_argument('--compression-level', type=int, help="Compression level: 0-6 for WavPack, 0-12 for FLAC. Default: 0")
     parser.add_argument('--skip-existing', action='store_true', help="Skip if the output file already exists. Default: False")
     parser.add_argument('--parallel', type=int, help="Number of parallel jobs. Default: 2")
@@ -710,14 +731,18 @@ Practical Examples:
     if args.resampler: CONFIG.RESAMPLER = args.resampler
     if args.precision: CONFIG.PRECISION = str(args.precision)
     if args.cheby: CONFIG.CHEBY = args.cheby
-    if args.spectrogram:
+    if args.spectrogram is not None:
         CONFIG.ENABLE_VISUALIZATION = True
-        if args.spectrogram and validate_resolution(args.spectrogram[0]):
-            CONFIG.VISUALIZATION_SIZE = args.spectrogram[0]
-            if len(args.spectrogram) > 1:
-                CONFIG.VISUALIZATION_TYPE = args.spectrogram[1]
-                if len(args.spectrogram) > 2 and CONFIG.VISUALIZATION_TYPE == 'spectrogram':
-                    CONFIG.SPECTROGRAM_MODE = args.spectrogram[2]
+        params = list(args.spectrogram)
+        # First token: optional resolution (e.g. 1920x1080) — defaults to 1920x1080
+        if params and validate_resolution(params[0]):
+            CONFIG.VISUALIZATION_SIZE = params.pop(0)
+        # Next token: optional type (spectrogram or waveform)
+        if params and params[0] in ('spectrogram', 'waveform'):
+            CONFIG.VISUALIZATION_TYPE = params.pop(0)
+        # Next token: optional mode (combined or separate), only for spectrogram type
+        if params and CONFIG.VISUALIZATION_TYPE == 'spectrogram' and params[0] in ('combined', 'separate'):
+            CONFIG.SPECTROGRAM_MODE = params.pop(0)
     if args.compression_level:
         if CONFIG.OUTPUT_FORMAT == 'wavpack' and 0 <= args.compression_level <= 6:
             CONFIG.WAVPACK_COMPRESSION = str(args.compression_level)
