@@ -794,39 +794,39 @@ Practical Examples:
     # Directory flow
     # ------------------------------------------------------------------
     elif path.is_dir():
-        os.chdir(path)
-        files = [str(f) for f in Path('.').glob('*.dsf')]
-        subdirs = [d for d in Path('.').glob('*') if d.is_dir() and any(f.suffix == '.dsf' for f in d.glob('*.dsf'))]
+        abs_path = path.resolve()
+        files = [str(f) for f in abs_path.glob('*.dsf')]
+        subdirs = [d for d in abs_path.iterdir() if d.is_dir() and any(f.suffix == '.dsf' for f in d.glob('*.dsf'))]
 
         if args.volume == 'auto':
             if files:
-                logger.info(f"Processing directory: {path}")
+                logger.info(f"Processing directory: {abs_path}")
                 volume_map, volume_data = calculate_volume_adjustment(files, "", log_file)
                 all_volume_data.extend(volume_data)
                 all_volume_maps.append(volume_map)
-                success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), volume_map, log_file)
+                success &= process_files_in_parallel(files, str(abs_path / OUTPUT_DIRS[args.format]), volume_map, log_file)
             if subdirs:
-                logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
+                logger.info(f"Processing subdirectories in {abs_path}: {', '.join(d.name for d in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
                     volume_map, volume_data = calculate_volume_adjustment(subdir_files, str(subdir), log_file)
                     all_volume_data.extend(volume_data)
                     all_volume_maps.append(volume_map)
-                    success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), volume_map, log_file)
+                    success &= process_files_in_parallel(subdir_files, str(subdir / OUTPUT_DIRS[args.format]), volume_map, log_file)
             if not files and not subdirs:
-                logger.error(f"No .dsf files found in {path} or its subdirectories")
+                logger.error(f"No .dsf files found in {abs_path} or its subdirectories")
                 success = False
         else:
             if files:
-                logger.info(f"Processing directory: {path}")
-                success &= process_files_in_parallel(files, os.path.join(path, OUTPUT_DIRS[args.format]), [(f, args.volume) for f in files], log_file)
+                logger.info(f"Processing directory: {abs_path}")
+                success &= process_files_in_parallel(files, str(abs_path / OUTPUT_DIRS[args.format]), [(f, args.volume) for f in files], log_file)
             if subdirs:
-                logger.info(f"Processing subdirectories in {path}: {', '.join(str(s) for s in subdirs)}")
+                logger.info(f"Processing subdirectories in {abs_path}: {', '.join(d.name for d in subdirs)}")
                 for subdir in subdirs:
                     subdir_files = [str(f) for f in subdir.glob('*.dsf')]
-                    success &= process_files_in_parallel(subdir_files, os.path.join(subdir, OUTPUT_DIRS[args.format]), [(f, args.volume) for f in subdir_files], log_file)
+                    success &= process_files_in_parallel(subdir_files, str(subdir / OUTPUT_DIRS[args.format]), [(f, args.volume) for f in subdir_files], log_file)
             if not files and not subdirs:
-                logger.error(f"No .dsf files found in {path} or its subdirectories")
+                logger.error(f"No .dsf files found in {abs_path} or its subdirectories")
                 success = False
     else:
         logger.error(f"Invalid path or unsupported format: {args.path}")
