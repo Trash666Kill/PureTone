@@ -77,9 +77,11 @@ SACD_TEMP_DIR = f"/tmp/puretone_{os.getpid()}_sacd"
 def run_command(cmd: List[str], capture_output: bool = True, cwd: Optional[str] = None) -> Tuple[str, str, int]:
     logger.debug(f"Executing command: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=capture_output, text=True, cwd=cwd)
+    stdout = result.stdout or ''
+    stderr = result.stderr or ''
     if result.returncode != 0:
-        logger.error(f"Command failed with return code {result.returncode}: {result.stderr}")
-    return result.stdout, result.stderr, result.returncode
+        logger.error(f"Command failed with return code {result.returncode}: {stderr}")
+    return stdout, stderr, result.returncode
 
 def normalize_path(path: str) -> str:
     return os.path.normpath(path).replace('//', '/')
@@ -400,7 +402,9 @@ def extract_iso(iso_path: str, sacd_bin: str, output_dir: Optional[str] = None) 
         '--output-dir-conc', dsf_dir,
     ]
 
-    stdout, stderr, rc = run_command(cmd, cwd=cfg_cwd)
+    # Em modo debug, deixa sacd_extract escrever direto no terminal
+    capture = not logger.isEnabledFor(logging.DEBUG)
+    stdout, stderr, rc = run_command(cmd, capture_output=capture, cwd=cfg_cwd)
 
     if rc != 0:
         logger.error(f"sacd_extract failed (rc={rc}):\n{stderr}")
