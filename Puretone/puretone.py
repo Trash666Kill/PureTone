@@ -381,13 +381,20 @@ def prepare_sacd_cfg() -> str:
 
 def extract_iso(iso_path: str, sacd_bin: str, output_dir: Optional[str] = None) -> Optional[str]:
     """
-    Extract DSFs from a SACD ISO to <output_dir>/dsf/.
-    If output_dir is not provided, uses the ISO's own directory.
+    Extract DSFs from a SACD ISO to <base_dir>/<iso_stem>/dsf/.
+    The iso_stem (filename without extension) scopes each album to its own
+    directory, mirroring the way the original DSF flow derives output dirs
+    from the input path — preventing collisions between different albums.
+    If output_dir is not provided, uses the ISO's own directory as base.
     Returns the dsf/ directory path on success, None on failure.
     """
     iso_path = os.path.abspath(iso_path)
+    iso_stem = Path(iso_path).stem
     base_dir = os.path.abspath(output_dir) if output_dir else os.path.dirname(iso_path)
-    dsf_dir = normalize_path(os.path.join(base_dir, OUTPUT_DIRS['dsf']))
+
+    # <output_dir>/<iso_stem>/dsf/  — isolated per album
+    album_dir = normalize_path(os.path.join(base_dir, iso_stem))
+    dsf_dir = normalize_path(os.path.join(album_dir, OUTPUT_DIRS['dsf']))
 
     os.makedirs(dsf_dir, exist_ok=True)
     logger.info(f"Extracting ISO: {iso_path} -> {dsf_dir}")
@@ -410,28 +417,35 @@ def extract_iso(iso_path: str, sacd_bin: str, output_dir: Optional[str] = None) 
         logger.error(f"sacd_extract failed (rc={rc}):\n{stderr}")
         return None
 
-    # sacd_extract creates a subdirectory named after the album inside dsf_dir
-    # e.g.: dsf/Exodus/*.dsf — search recursively
+    # sacd_extract may create a subdirectory named after the album inside dsf_dir
+    # e.g.: dsf/Stones/*.dsf — find the actual DSF location
     dsf_files = list(Path(dsf_dir).rglob('*.dsf'))
     if not dsf_files:
         logger.error(f"sacd_extract completed but no .dsf files found in {dsf_dir}")
         return None
 
-    # Return the actual directory where DSFs reside (album subdirectory)
+    # Return the actual directory where DSFs reside
     actual_dsf_dir = str(dsf_files[0].parent)
     logger.info(f"Extracted {len(dsf_files)} DSF file(s) to {actual_dsf_dir}")
     return actual_dsf_dir
 
 def cleanup_dsf_dir(dsf_dir: str):
-    """Remove the dsf/ directory after conversion, unless --keep-dsf is active."""
+    """
+    Remove the dsf/ subtree after conversion, unless --keep-dsf is active.
+    dsf_dir may be the internal album subdir (dsf/<album>/) — in that case
+    we remove the parent dsf/ directory to clean up completely.
+    """
     if CONFIG.KEEP_DSF:
         logger.info(f"Keeping DSF directory: {dsf_dir}")
         return
+    # If dsf_dir is <album_dir>/dsf/<internal>/, remove <album_dir>/dsf/ entirely
+    parent = os.path.dirname(dsf_dir)
+    target = parent if os.path.basename(parent) == OUTPUT_DIRS['dsf'] else dsf_dir
     try:
-        shutil.rmtree(dsf_dir)
-        logger.info(f"Removed DSF directory: {dsf_dir}")
+        shutil.rmtree(target)
+        logger.info(f"Removed DSF directory: {target}")
     except Exception as e:
-        logger.error(f"Failed to remove DSF directory {dsf_dir}: {e}")
+        logger.error(f"Failed to remove DSF directory {target}: {e}")
 
 # ---------------------------------------------------------------------------
 
@@ -520,15 +534,19 @@ def process_dsf_directory(dsf_dir: str, args, log_file: Optional[str]) -> bool:
         logger.error(f"No .dsf files found in {dsf_dir}")
         return False
 
-    # Converted files go to the same level as dsf/, going up two levels:
-    # dsf/Exodus/ -> up to dsf/ -> up to base -> flac/
-    # If dsf_dir is dsf/Exodus, base is the directory containing dsf/
-    dsf_parent = os.path.dirname(dsf_dir)  # dsf/
-    base_dir = os.path.dirname(dsf_parent)  # diretorio raiz do output
-    # If dsf_dir is already the top level (no album subdir), go up only one level
-    if os.path.basename(dsf_parent) != OUTPUT_DIRS['dsf']:
-        base_dir = dsf_parent
-    output_dir = os.path.join(base_dir, OUTPUT_DIRS[args.format])
+    # Walk up from the actual DSF directory to find the album container:
+    # <output_dir>/<iso_stem>/dsf/<album_internal>/  -> actual_dsf_dir  (4 levels)
+    # <output_dir>/<iso_stem>/dsf/                   -> dsf_parent
+    # <output_dir>/<iso_stem>/                       -> album_dir  (sibling of dsf/)
+    # Converted files go to <album_dir>/<format>/
+    dsf_parent = os.path.dirname(dsf_dir)
+    if os.path.basename(dsf_parent) == OUTPUT_DIRS['dsf']:
+        # dsf_dir is the album subdirectory inside dsf/ — go up two levels
+        album_dir = os.path.dirname(dsf_parent)
+    else:
+        # dsf_dir is dsf/ itself (no internal album subdir) — go up one level
+        album_dir = dsf_parent
+    output_dir = os.path.join(album_dir, OUTPUT_DIRS[args.format])
     all_volume_data = []
     all_volume_maps = []
     success = True
