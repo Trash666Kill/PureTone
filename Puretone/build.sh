@@ -4,7 +4,7 @@ sudo apt install gcc ccache build-essential patchelf \
     libpython3-dev python3-venv
 
 # venv
-python3 -m venv venv
+python3 -m venv .venv
 source venv/bin/activate
 
 # Nuitka e zstandard (compressão do onefile) no usuário
