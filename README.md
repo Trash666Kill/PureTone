@@ -167,44 +167,58 @@ A decimação DSD para PCM via `ffmpeg` altera o nível de pico do sinal. Para c
 
 Seja:
 
-- $V_{DSD}$ = volume máximo medido do arquivo DSD original (em dBFS)
-- $V_{WAV}$ = volume máximo medido do WAV temporário gerado pela reamostragem (em dBFS)
+- $V_{DSD}$ = nível de pico máximo do arquivo DSD original (em dBFS)
+- $V_{WAV}$ = nível de pico máximo do WAV temporário gerado pela reamostragem (em dBFS)
+
+> **Nota:** os valores são medidos em **dBFS** (decibels relative to Full Scale), a escala de amplitude digital do ffmpeg. $0\,\text{dBFS}$ representa o nível máximo possível sem clipping.
 
 A **compensação de conversão** para cada arquivo $i$ é:
 
 $$y_i = -(V_{WAV,i} - V_{DSD,i}) = V_{DSD,i} - V_{WAV,i}$$
 
-> **Interpretação:** se a conversão reduziu o nível em 3 dB (i.e., $V_{WAV} = V_{DSD} - 3$), então $y = +3\,\text{dB}$, e esse valor é aplicado como ganho para restaurar o nível original.
+O sinal negativo inverte a diferença para determinar o ganho necessário a fim de alinhar o nível do WAV de volta ao do DSD original.
+
+**Exemplo numérico:**
+
+$$V_{DSD} = -9{,}9\,\text{dBFS}, \quad V_{WAV} = -11{,}8\,\text{dBFS}$$
+
+$$y = -(-11{,}8 - (-9{,}9)) = -(-1{,}9) = +1{,}9\,\text{dB}$$
+
+A conversão reduziu o nível em 1,9 dB; o PureTone aplica $+1{,}9\,\text{dB}$ para restaurá-lo.
 
 ---
 
 ### Verificação de Headroom e Ajuste Uniforme
 
-Após calcular $y_i$ para todos os arquivos do grupo, o PureTone determina o **volume ajustado resultante** de cada faixa:
+Após calcular $y_i$ para todos os arquivos do grupo, o PureTone estima o nível de pico resultante de cada faixa após o ajuste:
 
 $$V_{adj,i} = V_{WAV,i} + y_i$$
 
-Note que, por definição, $V_{adj,i} = V_{DSD,i}$. O nível mais alto do grupo é:
+Por definição, $V_{adj,i} = V_{DSD,i}$ — é o nível que o arquivo terá após a compensação. Essa estimativa é usada para verificar se alguma faixa ultrapassaria o limite de headroom antes de gravar qualquer arquivo. O nível mais alto do grupo é:
 
 $$V_{max} = \max_i \left( V_{adj,i} \right)$$
 
-Se $V_{max}$ ultrapassar o **headroom limit** $H$ (padrão: $-0{,}5\,\text{dBFS}$):
+O ajuste uniforme $\Delta$ é então definido como:
 
-$$V_{max} > H$$
+$$\Delta = \begin{cases} H - V_{max} & \text{se } V_{max} > H \\ 0 & \text{se } V_{max} \leq H \end{cases}$$
 
-é aplicado um **ajuste uniforme** (o mesmo para todos os arquivos do grupo):
-
-$$\Delta = H - V_{max}$$
-
-O ajuste final para cada arquivo passa a ser:
+onde $H = -0{,}5\,\text{dBFS}$ por padrão. O ajuste para cada arquivo passa a ser:
 
 $$y'_i = y_i + \Delta$$
 
-Isso garante que o arquivo mais alto do grupo toque exatamente em $H$, e todos os outros são abaixados proporcionalmente, mantendo os níveis relativos entre as faixas do álbum.
+Quando $\Delta < 0$, todos os arquivos são rebaixados igualmente, garantindo que o mais alto toque exatamente em $H$ e que os níveis relativos entre as faixas do álbum sejam preservados.
 
-Se $V_{max} \leq H$, nenhum ajuste uniforme é necessário e cada arquivo usa seu próprio $y_i$:
+**Exemplo — sem ajuste necessário:**
 
-$$y'_i = y_i$$
+$$V_{adj} = [-9{,}9,\; -7{,}4,\; -9{,}5,\; -8{,}6]\,\text{dBFS}$$
+
+$$V_{max} = -7{,}4\,\text{dBFS} \quad \Rightarrow \quad -7{,}4 < -0{,}5 \quad \Rightarrow \quad \Delta = 0$$
+
+**Exemplo hipotético — com ajuste:**
+
+$$V_{max} = -0{,}3\,\text{dBFS} \quad \Rightarrow \quad \Delta = -0{,}5 - (-0{,}3) = -0{,}2\,\text{dB}$$
+
+$$\text{Faixa 01: } y'= 1{,}9 + (-0{,}2) = 1{,}7\,\text{dB}$$
 
 ---
 
