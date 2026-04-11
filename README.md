@@ -488,6 +488,18 @@ O PureTone processa múltiplos arquivos em paralelo usando `ThreadPoolExecutor`.
 
 ## Exemplos de Uso
 
+### ⭐ Converter um ISO de SACD para FLAC com caminho completo (recomendado)
+
+```bash
+puretone --format flac --compression-level 12 --sample-rate 88200 \
+         --parallel 6 --volume auto --volume-increase 2dB \
+         --spectrogram --log log.txt --keep-dsf \
+         /mnt/Services/Puretone/Download/0/Uriah\ Heep/1972_05\ \'Demons\ And\ Wizards\'/Uriah\ Heep\ -\ 1972\ Demons\ And\ Wizards.iso \
+         --output-dir /home/sysop/Temp/PureTone/
+```
+
+Extrai os DSFs do ISO, converte para FLAC 88,2 kHz com máxima compressão, ajuste automático de volume com margem de +2 dB, gera espectrogramas para cada faixa, mantém os DSFs extraídos e salva tudo em um diretório de trabalho temporário separado. Este é o fluxo completo e recomendado para conversão de SACDs.
+
 ### Processar um diretório com espectrograma, log e saída customizada
 
 ```bash
