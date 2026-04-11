@@ -1,1 +1,0 @@
-sacd_extract --2ch-tracks --output-dsf -i /mnt/Services/Puretone/Download/0/Stravinsky.iso --output-dir-conc /mnt/Services/Puretone/Music/0/Analyzing/
