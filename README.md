@@ -237,13 +237,13 @@ $$y_i = -(V_{WAV,i} - V_{DSD,i}) = V_{DSD,i} - V_{WAV,i}$$
 
 O sinal negativo inverte a diferença para determinar o ganho necessário a fim de alinhar o nível do WAV de volta ao do DSD original.
 
-**Exemplo numérico:**
+**Exemplo numérico** (faixa 01 — *The Wizard*, Uriah Heep *Demons And Wizards*):
 
-$$V_{DSD} = -9{,}9\,\text{dBFS}, \quad V_{WAV} = -11{,}8\,\text{dBFS}$$
+$$V_{DSD} = -2{,}8\,\text{dBFS}, \quad V_{WAV} = -5{,}0\,\text{dBFS}$$
 
-$$y = -(-11{,}8 - (-9{,}9)) = -(-1{,}9) = +1{,}9\,\text{dB}$$
+$$y = -(-5{,}0 - (-2{,}8)) = -(-2{,}2) = +2{,}2\,\text{dB}$$
 
-A conversão reduziu o nível em 1,9 dB; o PureTone aplica $+1{,}9\,\text{dB}$ para restaurá-lo.
+A conversão reduziu o nível em 2,2 dB; o PureTone aplica $+2{,}2\,\text{dB}$ para restaurá-lo.
 
 ---
 
@@ -267,17 +267,19 @@ $$y'_i = y_i + \Delta$$
 
 Quando $\Delta < 0$, todos os arquivos são rebaixados igualmente, garantindo que o mais alto toque exatamente em $H$ e que os níveis relativos entre as faixas do álbum sejam preservados.
 
-**Exemplo — sem ajuste necessário:**
+**Exemplo real — sem ajuste necessário** (Uriah Heep *Demons And Wizards*, 9 faixas):
 
-$$V_{adj} = [-9{,}9,\; -7{,}4,\; -9{,}5,\; -8{,}6]\,\text{dBFS}$$
+$$V_{adj} = [-2{,}8,\; -2{,}5,\; -3{,}0,\; -2{,}7,\; -2{,}7,\; -2{,}4,\; -3{,}3,\; -3{,}7,\; -3{,}4]\,\text{dBFS}$$
 
-$$V_{max} = -7{,}4\,\text{dBFS} \quad \Rightarrow \quad -7{,}4 < -0{,}5 \quad \Rightarrow \quad \Delta = 0$$
+$$V_{max} = -2{,}4\,\text{dBFS} \quad \Rightarrow \quad -2{,}4 < -0{,}5 \quad \Rightarrow \quad \Delta = 0$$
+
+Nenhum ajuste uniforme foi necessário; cada faixa usa seu $y_i$ individual.
 
 **Exemplo hipotético — com ajuste:**
 
 $$V_{max} = -0{,}3\,\text{dBFS} \quad \Rightarrow \quad \Delta = -0{,}5 - (-0{,}3) = -0{,}2\,\text{dB}$$
 
-$$\text{Faixa 01: } y'= 1{,}9 + (-0{,}2) = 1{,}7\,\text{dB}$$
+$$\text{Faixa 01: } y'= 2{,}2 + (-0{,}2) = 2{,}0\,\text{dB}$$
 
 ---
 
@@ -499,6 +501,46 @@ puretone --format flac --compression-level 12 --sample-rate 88200 \
 ```
 
 Extrai os DSFs do ISO, converte para FLAC 88,2 kHz com máxima compressão, ajuste automático de volume com margem de +2 dB, gera espectrogramas para cada faixa, mantém os DSFs extraídos e salva tudo em um diretório de trabalho temporário separado. Este é o fluxo completo e recomendado para conversão de SACDs.
+
+**Saída real desta execução:**
+
+```
+[18]     [INFO] Extracting ISO: ...Uriah Heep - 1972 Demons And Wizards.iso -> .../dsf
+[33308]  [INFO] Extracted 9 DSF file(s) to .../dsf/1972 Demons And Wizards
+[41367]  [INFO] 01 - The Wizard.dsf:        DSD = -2.8 dB  WAV = -5.0 dB  y = 2.2 dB
+[50473]  [INFO] 02 - Traveller in Time.dsf: DSD = -2.5 dB  WAV = -5.0 dB  y = 2.5 dB
+[57366]  [INFO] 03 - Easy Livin'.dsf:       DSD = -3.0 dB  WAV = -5.0 dB  y = 2.0 dB
+[68599]  [INFO] 04 - Poet's Justice.dsf:    DSD = -2.7 dB  WAV = -5.0 dB  y = 2.3 dB
+[85720]  [INFO] 05 - Circle of Hands.dsf:   DSD = -2.7 dB  WAV = -5.0 dB  y = 2.3 dB
+[97224]  [INFO] 06 - Rainbow Demon.dsf:     DSD = -2.4 dB  WAV = -5.0 dB  y = 2.6 dB
+[104553] [INFO] 07 - All My Life.dsf:       DSD = -3.3 dB  WAV = -5.0 dB  y = 1.7 dB
+[117581] [INFO] 08 - Paradise.dsf:          DSD = -3.7 dB  WAV = -5.6 dB  y = 1.9 dB
+[136971] [INFO] 09 - The Spell.dsf:         DSD = -3.4 dB  WAV = -5.1 dB  y = 1.7 dB
+[137044] [INFO] All tracks have sufficient headroom. Applying 2.0dB increase to all tracks.
+[137044] [INFO] No adjusted volumes exceed -0.5 dB. Using individual y values as volume adjustments
+[137044] [INFO] Starting parallel processing with 6 workers for 9 files
+...
+[221067] [INFO] Completed parallel processing for 9 files. Success: True
+
+=== Volume Adjustment Summary ===
+File                                y (dB)   WAV Max (dB)   Applied Volume
+-------------------------------------------------------------------------------------
+01 - The Wizard.dsf                  2.2        -5.0           4.2 dB
+02 - Traveller in Time.dsf           2.5        -5.0           4.5 dB
+03 - Easy Livin'.dsf                 2.0        -5.0           4.0 dB
+04 - Poet's Justice.dsf              2.3        -5.0           4.3 dB
+05 - Circle of Hands.dsf             2.3        -5.0           4.3 dB
+06 - Rainbow Demon.dsf               2.6        -5.0           4.6 dB
+07 - All My Life.dsf                 1.7        -5.0           3.7 dB
+08 - Paradise.dsf                    1.9        -5.6           3.9 dB
+09 - The Spell.dsf                   1.7        -5.1           3.7 dB
+-------------------------------------------------------------------------------------
+
+[221067] [INFO] Process completed successfully!
+[221067] [INFO] Elapsed time: 221 seconds
+```
+
+Neste exemplo todas as faixas apresentaram $V_{WAV} \approx -5{,}0\,\text{dBFS}$ após a decimação DSD→PCM. Como nenhuma atingiu o headroom limit de $-0{,}5\,\text{dBFS}$, não houve ajuste uniforme ($\Delta = 0$). Todas as faixas tinham margem suficiente para o `--volume-increase 2dB`, que foi aplicado ao grupo inteiro — resultando em `Applied Volume = y + 2.0 dB` para cada faixa. O processamento paralelo com 6 workers converteu as 9 faixas em 221 segundos.
 
 ### Processar um diretório com espectrograma, log e saída customizada
 
