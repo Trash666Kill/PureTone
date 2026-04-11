@@ -142,6 +142,14 @@ python3 -m nuitka \
 
 O binário gerado em `dist/puretone` inclui o `sacd_extract` embutido e não depende de nenhum ambiente Python externo.
 
+### 5. Instalar o binário
+
+```bash
+mv dist/puretone /usr/local/bin/
+```
+
+Após isso, o comando `puretone` estará disponível globalmente no sistema.
+
 ---
 
 ## Fluxo de Processamento
