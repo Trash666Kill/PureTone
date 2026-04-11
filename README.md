@@ -255,6 +255,18 @@ Este valor é passado diretamente ao filtro `volume=` do ffmpeg durante a conver
 
 ---
 
+### Resumo dos parâmetros de volume
+
+**`--volume`** é o ponto de partida — define a estratégia geral. Com `auto`, toda a lógica de compensação e headroom entra em ação. Com um valor fixo como `3dB`, esse ganho é aplicado a todos os arquivos sem nenhuma análise. Sem `--volume`, o modo `loudnorm` é usado no lugar.
+
+**`--volume-increase`** só tem efeito com `auto`. Representa um ganho extra que o PureTone *tenta* aplicar após os ajustes individuais — mas só o faz se todas as faixas do grupo tiverem headroom suficiente para absorvê-lo. Se uma única faixa não couber, o aumento é descartado para o grupo inteiro. A lógica é de bloco: ou todas as faixas do álbum sobem juntas, ou nenhuma sobe.
+
+**`--addition`** também é exclusivo do `auto`, mas com comportamento oposto: é um ganho extra **incondicional**. Não verifica headroom, não tem condição de grupo — simplesmente soma ao ajuste calculado. Útil quando o álbum está muito baixo e você quer empurrar o nível além do que o algoritmo automático faria.
+
+**`--headroom-limit`** define o teto máximo de pico permitido na saída (padrão: `-0.5 dBFS`). Atua de duas formas: aciona o ajuste uniforme se o arquivo mais alto do grupo ultrapassar esse limite, e serve de guarda para o `volume-increase` — a verificação compara o pico de cada faixa com `headroom-limit` antes de permitir o ganho extra. O valor `-0.5` (em vez de `0`) existe para evitar clipping por erros de arredondamento na codificação final.
+
+---
+
 ### Modo `loudnorm` (padrão sem `--volume`)
 
 Quando nenhum `--volume` é especificado, o PureTone aplica normalização de loudness em **dois passes** usando o filtro `loudnorm` do ffmpeg, conforme o padrão EBU R128:
