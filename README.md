@@ -44,33 +44,85 @@ O PureTone resolve isso com um pipeline em três estágios:
 
 ## Dependências
 
-| Dependência | Função |
-|---|---|
-| `ffmpeg` | Conversão, reamostragem, análise de volume e geração de visualizações |
-| `ffprobe` | Inspeção de metadados dos arquivos de entrada |
-| `metaflac` | Escrita de tags em arquivos FLAC |
-| `sacd_extract` | Extração de DSFs a partir de ISOs de SACD (embutido no binário ou no PATH do sistema) |
+> **Plataforma:** o PureTone foi compilado e testado no **Debian 13**, com os pacotes nas versões disponibilizadas pelos repositórios oficiais da distribuição. Compatibilidade com outras distribuições Linux não é garantida, mas é esperada em sistemas com glibc equivalente ou superior.
+
+### Dependências de runtime
+
+Os pacotes abaixo precisam estar instalados no sistema para o uso do PureTone:
+
+```bash
+sudo apt install ffmpeg flac
+```
+
+| Pacote | Binários | Função |
+|---|---|---|
+| `ffmpeg` | `ffmpeg`, `ffprobe` | Conversão, reamostragem, análise de volume e geração de visualizações |
+| `flac` | `metaflac` | Escrita de tags em arquivos FLAC |
+
+O `sacd_extract` é embutido no próprio binário do PureTone e não requer instalação separada.
 
 ---
 
 ## Instalação e Build
 
-O PureTone pode ser executado diretamente via Python ou compilado em um binário único e portátil com [Nuitka](https://nuitka.net/).
+O PureTone é distribuído como um binário único e portátil compilado com [Nuitka](https://nuitka.net/), com o `sacd_extract` embutido. O processo de build tem duas etapas: compilar o `sacd_extract` e depois compilar o `puretone`.
 
-### Dependências do sistema
+### 1. Dependências do sistema
 
 ```bash
 sudo apt install gcc ccache build-essential patchelf \
     python3 python3-dev python3-pip \
-    libpython3-dev python3-venv
+    libpython3-dev python3-venv cmake
 ```
 
-### Ambiente virtual e compilação
+### 2. Obter e compilar o sacd_extract
+
+O PureTone inclui um `sacd-ripper.tar.gz` pré-empacotado contendo apenas os arquivos necessários para compilar o `sacd_extract`. Essa é a forma recomendada.
+
+**Opção A — usando o tarball incluso (recomendado):**
+
+```bash
+tar -zxf sacd-ripper.tar.gz && rm sacd-ripper.tar.gz
+cd sacd-ripper/tools/sacd_extract/
+```
+
+**Opção B — direto do repositório upstream:**
+
+```bash
+wget https://github.com/sacd-ripper/sacd-ripper/archive/refs/heads/master.zip
+unzip -q master.zip && rm master.zip
+
+# Remover arquivos desnecessários para o build
+rm -rf sacd-ripper-master/{bin,docs,src,configure,Makefile,todo,readme.rst,COPYING}
+mv sacd-ripper-master sacd-ripper
+
+cd sacd-ripper/tools/sacd_extract/
+```
+
+> O tarball incluso é gerado exatamente com esses passos da Opção B, garantindo um fonte limpo e reproduzível.
+
+**Compilar** (igual para ambas as opções):
+
+```bash
+# Corrigir versão mínima do CMake exigida pelo projeto
+sed -i 's/cmake_minimum_required(VERSION 2.6)/cmake_minimum_required(VERSION 3.5)/' CMakeLists.txt
+
+CFLAGS="-Wno-incompatible-pointer-types" cmake .
+make -j$(nproc)
+```
+
+### 3. Copiar o binário para o diretório do PureTone
+
+```bash
+mkdir ../../../bin && cp sacd_extract ../../../bin && cd ../../../
+```
+
+### 4. Compilar o PureTone
 
 ```bash
 # Criar e ativar o ambiente virtual
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 
 # Instalar dependências Python
 pip install nuitka zstandard
@@ -79,8 +131,7 @@ pip install nuitka zstandard
 python3 -m nuitka \
     --onefile \
     --product-name=puretone \
-    --product-version=1.0.0 \
-    --onefile-tempdir-spec="{CACHE_DIR}/{PRODUCT}/{VERSION}" \
+    --onefile-tempdir-spec="{CACHE_DIR}/{PRODUCT}" \
     --include-data-files=bin/sacd_extract=bin/sacd_extract \
     --output-filename=puretone \
     --output-dir=dist \
@@ -429,22 +480,28 @@ O PureTone processa múltiplos arquivos em paralelo usando `ThreadPoolExecutor`.
 
 ## Exemplos de Uso
 
-### Converter um ISO de SACD para FLAC
+### Processar um diretório com espectrograma, log e saída customizada
 
 ```bash
-./puretone --format flac --compression-level 12 --volume auto \
-           --volume-increase 2dB --parallel 6 --log log.txt \
-           "Michael Jackson - Off The Wall.iso"
+puretone --format flac --compression-level 12 --sample-rate 88200 \
+         --parallel 6 --volume auto --volume-increase 2dB \
+         --spectrogram --log log.txt --keep-dsf \
+         /mnt/Services/Puretone/Download/0/ \
+         --output-dir /mnt/Services/Puretone/Music/0/Analyzing/
 ```
 
-### Processar um diretório com espectrograma e log
+Converte todos os DSFs do diretório de download para FLAC 88,2 kHz com ajuste automático de volume, gera espectrogramas, mantém os DSFs originais e salva os arquivos convertidos em um diretório de saída separado.
+
+### Converter um ISO de SACD para FLAC com waveform
 
 ```bash
-./puretone --format flac --compression-level 12 --sample-rate 88200 \
-           --parallel 6 --volume auto --volume-increase 2dB \
-           --spectrogram --log log.txt --keep-dsf \
-           /mnt/Music/Albums/
+puretone --format flac --compression-level 12 --sample-rate 88200 \
+         --parallel 6 --volume auto --volume-increase 2dB \
+         --spectrogram waveform --log log.txt --keep-dsf \
+         "Michael Jackson - Off The Wall.iso"
 ```
+
+Extrai os DSFs do ISO, converte para FLAC 88,2 kHz com ajuste automático de volume e gera visualizações de forma de onda (em vez de espectrograma) para cada faixa.
 
 ### Extrair DSFs do ISO sem converter
 

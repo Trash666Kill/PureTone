@@ -27,3 +27,9 @@ python3 -m nuitka \
 ./dist/puretone --format flac --compression-level 12 --sample-rate 88200 --parallel 6 --volume auto --volume-increase 2dB --spectrogram --log log.txt --keep-dsf /mnt/Services/Puretone/Download/0/ --output-dir /mnt/Services/Puretone/Music/0/Analyzing/
 
 ./puretone --format flac --compression-level 12 --sample-rate 88200 --parallel 6 --volume auto --volume-increase 2dB --spectrogram waveform --log log.txt --keep-dsf Michael\ Jackson\ -\ Off\ The\ Wall.iso
+
+
+
+puretone --format flac --compression-level 12 --sample-rate 88200 --parallel 6 --volume auto --volume-increase 2dB --spectrogram --log log.txt --keep-dsf /mnt/Services/Puretone/Download/0/ --output-dir /mnt/Services/Puretone/Music/0/Analyzing/
+
+puretone --format flac --compression-level 12 --sample-rate 88200 --parallel 6 --volume auto --volume-increase 2dB --spectrogram waveform --log log.txt --keep-dsf Michael\ Jackson\ -\ Off\ The\ Wall.iso
