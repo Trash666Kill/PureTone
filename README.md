@@ -542,6 +542,47 @@ File                                y (dB)   WAV Max (dB)   Applied Volume
 
 Neste exemplo todas as faixas apresentaram $V_{WAV} \approx -5{,}0\,\text{dBFS}$ após a decimação DSD→PCM. Como nenhuma atingiu o headroom limit de $-0{,}5\,\text{dBFS}$, não houve ajuste uniforme ($\Delta = 0$). Todas as faixas tinham margem suficiente para o `--volume-increase 2dB`, que foi aplicado ao grupo inteiro — resultando em `Applied Volume = y + 2.0 dB` para cada faixa. O processamento paralelo com 6 workers converteu as 9 faixas em 221 segundos.
 
+### ISO com variação dinâmica por faixa — Mozart *Requiem*
+
+Este exemplo ilustra um caso mais rico, onde as 14 faixas apresentam $y$ variando bastante entre si, refletindo a dinâmica natural de uma gravação orquestral.
+
+```bash
+puretone --format flac --compression-level 12 --sample-rate 88200 \
+         --parallel 6 --volume auto --volume-increase 2dB \
+         --spectrogram --log log.txt --keep-dsf \
+         /mnt/Services/Puretone/Download/0/Mozart\ -\ Requiem\ .../Mozart_\ Requiem.iso \
+         --output-dir /home/sysop/Temp/PureTone/
+```
+
+**Volume Adjustment Summary:**
+
+```
+Faixa                              y (dB)   WAV Max (dB)   Applied Volume
+--------------------------------------------------------------------------
+01 Introitus: Requiem               1.2        -8.6           3.2 dB
+02 Kyrie                            1.2        -8.6           3.2 dB
+03 Sequentia: Dies irae             0.8        -6.5           2.8 dB
+04 Sequentia: Tuba mirum            2.6       -14.4           4.6 dB
+05 Sequentia: Rex tremendae         1.6        -6.5           3.6 dB
+06 Sequentia: Recordare             1.7       -12.5           3.7 dB
+07 Sequentia: Confutatis            1.0        -7.8           3.0 dB
+08 Sequentia: Lacrimosa             0.7        -6.5           2.7 dB
+09 Offertorium: Domine Jesu         1.3        -7.9           3.3 dB
+10 Offertorium: Hostias             1.3        -8.0           3.3 dB
+11 Sanctus                          1.2        -6.5           3.2 dB
+12 Benedictus                       1.7        -9.0           3.7 dB
+13 Agnus Dei                        1.0        -7.6           3.0 dB
+14 Communio: Lux aeterna            1.1        -6.6           3.1 dB
+--------------------------------------------------------------------------
+
+[INFO] All tracks have sufficient headroom. Applying 2.0dB increase to all tracks.
+[INFO] No adjusted volumes exceed -0.5 dB. Using individual y values.
+[INFO] Completed parallel processing for 14 files. Success: True
+[INFO] Elapsed time: 254 seconds
+```
+
+Neste caso $y$ varia de $0{,}7\,\text{dB}$ (*Lacrimosa*) a $2{,}6\,\text{dB}$ (*Tuba mirum*), evidenciando que a atenuação introduzida pela decimação DSD→PCM não é uniforme entre faixas — ela depende do conteúdo espectral e da dinâmica de cada movimento. O `volume-increase` de 2 dB foi aplicado ao grupo inteiro, pois mesmo a faixa com maior $V_{WAV}$ ($-6{,}5\,\text{dBFS}$) tinha margem suficiente. O `Applied Volume` final de cada faixa é portanto $y_i + 2{,}0\,\text{dB}$, preservando integralmente os níveis relativos do álbum.
+
 ### Processar um diretório com espectrograma, log e saída customizada
 
 ```bash
