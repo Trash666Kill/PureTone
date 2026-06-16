@@ -71,8 +71,8 @@ O PureTone é distribuído como um binário único e portátil compilado com [Nu
 
 ```bash
 sudo apt install gcc ccache build-essential patchelf \
-    python3 python3-dev python3-pip \
-    libpython3-dev python3-venv cmake
+    python3 python3-dev python3-pip libxml2-dev \
+    libpython3-dev python3-venv cmake unzip
 ```
 
 ### 2. Obter e compilar o sacd_extract
